@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ollama-lens</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #677085; --line: #e1e4ea;
+    --accent: #2f6fdb; --ok: #1f8a4c; --warn: #b26b00; --bad: #c4352b; --think: #7a5bc4;
+    --gpu: #2f6fdb; --cpu: #9aa3b5; --code: #f1f3f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b1f27; --text: #e3e7ee; --muted: #8e97a8; --line: #2b313c;
+      --accent: #6fa0ff; --ok: #4cc283; --warn: #e0a33a; --bad: #ff7468; --think: #b49cff;
+      --gpu: #6fa0ff; --cpu: #566074; --code: #232833;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px;
+           border-bottom: 1px solid var(--line); background: var(--card); position: sticky; top: 0; z-index: 1; }
+  header h1 { font-size: 16px; margin: 0; }
+  .muted { color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+  .dot.live { background: var(--ok); } .dot.bad { background: var(--bad); }
+  main { padding: 20px; display: grid; gap: 24px; max-width: 1600px; margin: 0 auto; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  .models { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .card.idle { opacity: .7; }
+  .card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .card-head .name { font-weight: 600; font-size: 15px; }
+  .badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+  .badge.loaded { color: var(--ok); } .badge.unloaded { color: var(--muted); }
+  .facts { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0; color: var(--muted); font-size: 13px; }
+  .facts b { color: var(--text); font-weight: 600; }
+  .bar { height: 8px; border-radius: 4px; background: var(--cpu); overflow: hidden; margin: 6px 0 2px; }
+  .bar > span { display: block; height: 100%; background: var(--gpu); }
+  .legend { font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 4px 0 10px; vertical-align: -1px; }
+  .req { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+  .req-head { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .req-head .phase { font-weight: 600; }
+  .phase.waiting { color: var(--warn); } .phase.thinking { color: var(--think); } .phase.generating { color: var(--accent); }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 8px 0 2px; }
+  .text { white-space: pre-wrap; word-break: break-word; background: var(--code); border-radius: 6px;
+          padding: 8px 10px; max-height: 260px; overflow: auto; font: 13px/1.45 ui-monospace, "Cascadia Mono", Menlo, monospace; }
+  .text.thinking { color: var(--think); max-height: 160px; }
+  .text.prompt { max-height: 140px; }
+  .cursor::after { content: "▍"; color: var(--accent); animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .msg { margin: 6px 0; } .msg .role { font-weight: 600; font-size: 12px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.row { cursor: pointer; } tr.row:hover td { background: var(--code); }
+  tr.detail td { white-space: normal; background: var(--bg); }
+  .status-finished { color: var(--ok); } .status-error { color: var(--bad); } .status-cancelled { color: var(--warn); }
+  .cold { color: var(--warn); font-weight: 600; }
+  .empty { color: var(--muted); padding: 10px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } .models { grid-template-columns: 1fr; } }
+  .kv { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ollama-lens</h1>
+  <span><span id="conn-dot" class="dot"></span><span id="conn">connecting…</span></span>
+  <span class="muted" id="upstream"></span>
+  <span class="muted" id="ps"></span>
+</header>
+<main>
+  <section>
+    <h2>Models</h2>
+    <div class="models" id="models"></div>
+    <div class="empty" id="no-models">No model is loaded and no request is running.</div>
+  </section>
+  <section>
+    <h2>Last finished requests <span class="muted" id="recent-count"></span></h2>
+    <table>
+      <thead><tr>
+        <th>Time</th><th>Model</th><th>Endpoint</th><th>Client</th><th>Status</th>
+        <th class="num">Prompt tok</th><th class="num">Output tok</th><th class="num">TTFT</th>
+        <th class="num">Prompt tok/s</th><th class="num">Output tok/s</th><th class="num">Total</th><th>Load</th>
+      </tr></thead>
+      <tbody id="recent"></tbody>
+    </table>
+    <div class="empty" id="no-recent">Nothing finished yet. Requests sent to this port show up here.</div>
+  </section>
+</main>
+<script>
+"use strict";
+// Everything from requests is shown with textContent, never innerHTML: a prompt that
+// contains HTML is displayed as text and can't run in the browser.
+
+// ------------------------------------------------------------------ state
+const RECENT_MAX = 50;
+let models = [];          // from /api/ps
+let psOk = null, psError = null;
+const active = new Map(); // id -> request record (+ .el, its DOM element)
+let recent = [];          // finished records, newest first
+const cards = new Map();  // model key -> card element
+const openDetails = new Set();
+
+const $ = (id) => document.getElementById(id);
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined && text !== null) e.textContent = text;
+  return e;
+}
+const key = (name) => !name ? "(unknown)" : (name.split("/").pop().includes(":") ? name : name + ":latest");
+
+// ---------------------------------------------------------------- formatting
+function fmtBytes(n) {
+  if (n == null) return "–";
+  const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(i >= 3 ? 1 : 0) + " " + u[i];
+}
+function fmtSec(s) {
+  if (s == null) return "–";
+  if (s < 1) return Math.round(s * 1000) + " ms";
+  if (s < 60) return s.toFixed(1) + " s";
+  const m = Math.floor(s / 60), r = Math.round(s % 60);
+  return m + "m " + String(r).padStart(2, "0") + "s";
+}
+const fmtRate = (r) => r == null ? "–" : r.toFixed(r < 10 ? 1 : 0);
+const fmtNum = (n) => n == null ? "–" : n.toLocaleString();
+const fmtTime = (ts) => new Date(ts * 1000).toLocaleTimeString();
+const now = () => Date.now() / 1000;
+
+// ----------------------------------------------------------- prompt display
+function promptSummary(r) {
+  if (r.prompt != null) return r.prompt || "";
+  const msgs = r.messages || [];
+  for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === "user") return msgs[i].content || "";
+  return msgs.length ? (msgs[msgs.length - 1].content || "") : "";
+}
+function requestDetails(r) {
+  const d = el("details");
+  const n = (r.messages || []).length;
+  d.append(el("summary", null, (n ? n + " messages" : "request") +
+    (r.tools && r.tools.length ? ", " + r.tools.length + " tools" : "") + ", options"));
+  if (r.system) d.append(el("div", "label", "system"), el("div", "text prompt", r.system));
+  for (const m of r.messages || []) {
+    const box = el("div", "msg");
+    box.append(el("div", "role", m.role + (m.images ? "  (" + m.images + " image" + (m.images > 1 ? "s" : "") + ")" : "")
+      + (m.tool_calls ? "  (tool calls)" : "")));
+    box.append(el("div", "text prompt", m.content || (m.tool_calls ? JSON.stringify(m.tool_calls) : "")));
+    d.append(box);
+  }
+  if (r.tools && r.tools.length) {
+    d.append(el("div", "label", "tools"));
+    d.append(el("div", "kv", r.tools.map((t) => t.name + (t.description ? " — " + t.description : "")).join("\n")));
+  }
+  d.append(el("div", "label", "options"),
+           el("div", "kv", JSON.stringify(r.options || {}) + (r.stream === false ? "  (not streaming)" : "")));
+  return d;
+}
+
+// -------------------------------------------------------------- model cards
+function modelCard(k) {
+  let c = cards.get(k);
+  if (!c) {
+    c = el("div", "card");
+    c.head = el("div", "card-head");
+    c.badge = el("span", "badge");
+    c.extra = el("span", "muted");
+    c.head.append(el("span", "name", k), c.badge, c.extra);
+    c.facts = el("div", "facts");
+    c.mem = el("div");
+    c.reqs = el("div");
+    c.append(c.head, c.facts, c.mem, c.reqs);
+    cards.set(k, c);
+  }
+  return c;
+}
+function fact(label, value) {
+  const s = el("span", null, label + " ");
+  s.append(el("b", null, value));
+  return s;
+}
+function renderModels() {
+  // cards: loaded models, models with a request running, models used recently
+  const keys = new Set(models.map((m) => key(m.name)));
+  for (const r of active.values()) keys.add(key(r.model));
+  for (const r of recent.slice(0, 20)) keys.add(key(r.model));
+  const grid = $("models");
+  for (const [k, c] of cards) if (!keys.has(k)) { c.remove(); cards.delete(k); }
+  const loaded = new Map(models.map((m) => [key(m.name), m]));
+  const order = [...keys].sort((a, b) => (loaded.has(b) - loaded.has(a)) || a.localeCompare(b));
+  for (const k of order) {
+    const c = modelCard(k), m = loaded.get(k);
+    const busy = [...active.values()].some((r) => key(r.model) === k);
+    c.classList.toggle("idle", !m && !busy);
+    c.badge.className = "badge " + (m ? "loaded" : "unloaded");
+    c.badge.textContent = m ? "loaded" : (busy ? "loading / queued" : "not loaded");
+    c.extra.textContent = m ? [m.parameter_size, m.quantization].filter(Boolean).join(" · ") : "";
+    c.facts.replaceChildren();
+    c.mem.replaceChildren();
+    c.expires = null;
+    c.expiresAt = null;
+    if (m) {
+      c.facts.append(fact("size", fmtBytes(m.size)), fact("context", fmtNum(m.context_length)));
+      c.expires = el("b", null, "");
+      const exp = el("span", null, "unloads in ");
+      exp.append(c.expires);
+      c.facts.append(exp);
+      c.expiresAt = m.expires_at ? Date.parse(m.expires_at) / 1000 : null;
+      const bar = el("div", "bar"), gpu = el("span");
+      gpu.style.width = (m.vram_pct || 0) + "%";
+      bar.append(gpu);
+      const legend = el("div", "legend");
+      const g = el("i"); g.style.background = "var(--gpu)";
+      const p = el("i"); p.style.background = "var(--cpu)";
+      legend.append("memory:", g, "GPU " + fmtBytes(m.size_vram) + " (" + (m.vram_pct ?? 0) + "%)",
+                    p, "CPU / RAM " + fmtBytes(m.size_cpu));
+      c.mem.append(bar, legend);
+    }
+    grid.append(c);                                   // re-appending keeps the sorted order
+  }
+  for (const r of active.values()) modelCard(key(r.model)).reqs.append(r.el);
+  $("no-models").style.display = keys.size ? "none" : "";
+  tick();
+}
+
+// --------------------------------------------------------- active requests
+function phase(r) {
+  if (!r.chunks) return ["waiting", r.was_loaded === false ? "loading model / reading prompt" : "reading prompt"];
+  if (!r.content && !(r.tool_calls || []).length) return ["thinking", "thinking"];
+  return ["generating", "generating"];
+}
+function buildRequest(r) {
+  const e = el("div", "req");
+  e.head = el("div", "req-head");
+  e.phase = el("span", "phase");
+  e.elapsed = el("span");
+  e.rate = el("span");
+  e.head.append(e.phase, el("span", null, r.endpoint), el("span", null, r.client || ""), e.elapsed, e.rate);
+  e.append(e.head, el("div", "label", r.prompt != null ? "prompt" : "last user message"),
+           el("div", "text prompt", promptSummary(r)), requestDetails(r));
+  e.thinkLabel = el("div", "label", "thinking");
+  e.think = el("div", "text thinking");
+  e.think.append(document.createTextNode(r.thinking || ""));
+  e.outLabel = el("div", "label", "response");
+  e.out = el("div", "text cursor");
+  e.out.append(document.createTextNode(r.content || ""));
+  e.calls = el("div", "kv");
+  e.append(e.thinkLabel, e.think, e.outLabel, e.out, e.calls);
+  r.el = e;
+  updateRequest(r);
+  return e;
+}
+function appendText(box, text) {
+  if (!text) return;
+  const follow = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;   // unless scrolled up
+  box.firstChild.appendData(text);
+  if (follow) box.scrollTop = box.scrollHeight;
+}
+function updateRequest(r) {
+  const e = r.el;
+  const [cls, label] = phase(r);
+  e.phase.className = "phase " + cls;
+  e.phase.textContent = label;
+  e.thinkLabel.style.display = e.think.style.display = r.thinking ? "" : "none";
+  e.calls.textContent = (r.tool_calls || []).length ? "tool calls: " + JSON.stringify(r.tool_calls) : "";
+}
+function tick() {
+  const t = now();
+  for (const r of active.values()) {
+    r.el.elapsed.textContent = fmtSec(t - r.ts);
+    if (r.first_token_ts) {
+      const ttft = "first token after " + fmtSec(r.first_token_ts - r.ts);
+      r.el.rate.textContent = r.chunks > 1
+        ? "≈ " + fmtRate((r.chunks - 1) / Math.max(t - r.first_token_ts, 0.001)) + " tok/s · " + ttft
+        : ttft;
+    }
+  }
+  for (const c of cards.values()) {
+    if (c.expires && c.expiresAt) {
+      const left = c.expiresAt - t;
+      c.expires.textContent = left > 3e8 ? "never" : (left > 0 ? fmtSec(left) : "now");
+    }
+  }
+}
+setInterval(tick, 1000);
+
+// ------------------------------------------------------------ recent table
+function recentRow(r) {
+  const s = r.stats || {};
+  const tr = el("tr", "row");
+  const cells = [
+    [fmtTime(r.ts)], [r.model || "?"], [r.endpoint], [r.client || ""],
+    [r.status, "status-" + r.status],
+    [fmtNum(s.prompt_tokens), "num"], [fmtNum(s.output_tokens), "num"], [fmtSec(s.ttft_s), "num"],
+    [fmtRate(s.prompt_tokens_per_s), "num"],
+    [fmtRate(s.output_tokens_per_s) + (s.rate_source === "chunks" ? "*" : ""), "num"],
+    [fmtSec(s.wall_s), "num"],
+    [s.cold_load === true ? "cold " + fmtSec(s.load_s) : (s.cold_load === false ? "warm" : "?"), s.cold_load ? "cold" : ""],
+  ];
+  for (const [text, cls] of cells) tr.append(el("td", cls || "", text));
+  if (s.rate_source === "chunks") tr.title = "* estimated from chunk timing (no Ollama durations on /v1)";
+  const detail = el("tr", "detail");
+  const td = el("td");
+  td.colSpan = cells.length;
+  const g = el("div", "grid2"), left = el("div"), right = el("div");
+  left.append(el("div", "label", r.prompt != null ? "prompt" : "last user message"),
+              el("div", "text prompt", promptSummary(r)), requestDetails(r));
+  if (r.thinking) right.append(el("div", "label", "thinking"), el("div", "text thinking", r.thinking));
+  right.append(el("div", "label", "response"), el("div", "text", r.content || ""));
+  if ((r.tool_calls || []).length) right.append(el("div", "kv", "tool calls: " + JSON.stringify(r.tool_calls)));
+  if (r.error) right.append(el("div", "label", "error"), el("div", "text status-error", r.error));
+  right.append(el("div", "label", "Ollama stats"), el("div", "kv", JSON.stringify(r.raw_stats || {})));
+  g.append(left, right);
+  td.append(g);
+  detail.append(td);
+  detail.style.display = openDetails.has(r.id) ? "" : "none";
+  tr.addEventListener("click", () => {
+    const open = detail.style.display === "none";
+    detail.style.display = open ? "" : "none";
+    if (open) openDetails.add(r.id); else openDetails.delete(r.id);
+  });
+  return [tr, detail];
+}
+function renderRecent() {
+  $("recent").replaceChildren(...recent.flatMap(recentRow));
+  $("no-recent").style.display = recent.length ? "none" : "";
+  $("recent-count").textContent = recent.length ? "(" + recent.length + ", in memory only)" : "";
+}
+
+// ---------------------------------------------------------------- events
+function startRequest(r) {
+  r.content = r.content || ""; r.thinking = r.thinking || "";
+  r.tool_calls = r.tool_calls || []; r.chunks = r.chunks || 0;
+  active.set(r.id, r);
+  buildRequest(r);
+}
+function renderPs() {
+  $("ps").textContent = psOk === false ? "/api/ps failing: " + (psError || "") : "";
+}
+const handlers = {
+  snapshot(ev) {
+    for (const r of active.values()) r.el.remove();
+    active.clear();
+    models = ev.models || []; psOk = ev.ps_ok; psError = ev.ps_error;
+    for (const r of ev.active || []) startRequest(r);
+    recent = ev.recent || [];
+    if (ev.upstream) $("upstream").textContent = "→ " + ev.upstream;
+    renderPs(); renderModels(); renderRecent();
+  },
+  models(ev) { models = ev.models || []; psOk = ev.ok; psError = ev.error; renderPs(); renderModels(); },
+  started(ev) { startRequest({ ...ev }); renderModels(); },
+  token(ev) {
+    const r = active.get(ev.id);
+    if (!r) return;
+    if (!r.first_token_ts) r.first_token_ts = ev.ts;
+    r.chunks++;
+    if (ev.thinking) { r.thinking += ev.thinking; appendText(r.el.think, ev.thinking); }
+    if (ev.content) { r.content += ev.content; appendText(r.el.out, ev.content); }
+    if (ev.tool_calls) r.tool_calls.push(...ev.tool_calls);
+    updateRequest(r);
+  },
+  end(ev) {
+    const r = active.get(ev.id);
+    if (!r) return;
+    active.delete(ev.id);
+    r.el.remove();
+    const done = { ...r, ...ev, status: ev.type, ts: r.ts, ended_ts: ev.ts };
+    delete done.el; delete done.type;
+    recent.unshift(done);
+    recent = recent.slice(0, RECENT_MAX);
+    renderModels(); renderRecent();
+  },
+};
+handlers.finished = handlers.error = handlers.cancelled = handlers.end;
+
+// -------------------------------------------------------------- websocket
+let retry = 1000;
+function connect() {
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/lens/ws");
+  ws.onopen = () => { retry = 1000; $("conn").textContent = "live"; $("conn-dot").className = "dot live"; };
+  ws.onmessage = (m) => {
+    try {
+      const ev = JSON.parse(m.data);
+      (handlers[ev.type] || (() => {}))(ev);
+    } catch (err) { console.error("event failed", err); }
+  };
+  ws.onclose = () => {
+    $("conn").textContent = "reconnecting…"; $("conn-dot").className = "dot bad";
+    setTimeout(connect, retry);
+    retry = Math.min(retry * 2, 5000);
+  };
+}
+connect();
+</script>
+</body>
+</html>
