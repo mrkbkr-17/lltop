@@ -29,5 +29,7 @@ def main() -> None:
 
     logging.basicConfig(level=args.log_level.upper(),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # httpx logs every request at INFO, including the /api/ps poll every few seconds.
+    logging.getLogger("httpx").setLevel(max(logging.WARNING, logging.getLogger().level))
     app = create_app(args.upstream.rstrip("/"), poll_interval=args.poll)
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level.lower())
