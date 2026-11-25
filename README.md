@@ -72,6 +72,22 @@ The image listens on all interfaces inside the container and expects Ollama at
 `http://host.docker.internal:11434` (set `LLTOP_UPSTREAM` otherwise, e.g.
 `http://ollama:11434` when both run on the same Docker network).
 
+### Run as a service (systemd)
+
+[`contrib/systemd/lltop.service`](contrib/systemd/lltop.service) runs lltop as a systemd
+user service that starts at boot and restarts if it crashes:
+
+```sh
+uv sync --no-dev
+systemctl --user link "$PWD/contrib/systemd/lltop.service"
+systemctl --user enable --now lltop.service
+journalctl --user -fu lltop
+```
+
+The unit expects the clone at `~/lltop`; edit `ExecStart` otherwise. Settings go in
+`~/.config/lltop/env` (for example `LLTOP_HOST=0.0.0.0`). To keep it running while you are
+logged out: `sudo loginctl enable-linger $USER`.
+
 ## Privacy
 
 The dashboard shows every prompt and response in full, to anyone who can open the page.

@@ -1,0 +1,28 @@
+# systemd user service for lltop.
+#
+# Install (as your own user, no sudo):
+#   cd ~/lltop && uv sync --no-dev        # creates ~/lltop/.venv
+#   systemctl --user link ~/lltop/contrib/systemd/lltop.service
+#   systemctl --user enable --now lltop.service
+# Keep it running when you are logged out (once, needs sudo):
+#   sudo loginctl enable-linger $USER
+# Logs:  journalctl --user -fu lltop
+#
+# Settings go in ~/.config/lltop/env (optional), one per line, e.g.
+#   LLTOP_HOST=0.0.0.0        # listen on the LAN (default 127.0.0.1)
+#   LLTOP_UPSTREAM=http://127.0.0.1:11434
+
+[Unit]
+Description=lltop: streaming proxy in front of Ollama with a live dashboard
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/lltop/env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/lltop/.venv/bin/lltop
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=lltop
+
+[Install]
+WantedBy=default.target
