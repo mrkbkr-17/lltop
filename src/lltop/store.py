@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS requests (
     endpoint            text,
     api                 text,               -- chat | generate | openai
     client              text,
+    app                 text,               -- calling app (X-Lltop-App, LiteLLM key alias)
     stream              boolean,
     was_loaded          boolean,            -- per /api/ps when the request started
     preview             text,               -- last user message / prompt, shortened
@@ -69,6 +70,7 @@ CREATE TABLE IF NOT EXISTS requests (
         to_tsvector('simple', coalesce(preview, '') || ' ' || coalesce(system, '') || ' ' ||
                               left(coalesce(content, ''), 100000))) STORED
 );
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS app text;   -- added after the first release
 CREATE INDEX IF NOT EXISTS requests_started_idx ON requests (started_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS requests_model_idx ON requests (model, started_at DESC);
 CREATE INDEX IF NOT EXISTS requests_search_idx ON requests USING gin (search);
@@ -77,7 +79,7 @@ CREATE INDEX IF NOT EXISTS requests_search_idx ON requests USING gin (search);
 STAT_COLUMNS = ("prompt_tokens", "output_tokens", "prompt_tokens_per_s", "output_tokens_per_s",
                 "rate_source", "ttft_s", "load_s", "prompt_eval_s", "eval_s", "total_s", "wall_s",
                 "cold_load", "done_reason")
-TEXT_COLUMNS = ("model", "endpoint", "api", "client", "preview", "prompt", "system", "content",
+TEXT_COLUMNS = ("model", "endpoint", "api", "client", "app", "preview", "prompt", "system", "content",
                 "thinking", "error")
 JSON_COLUMNS = ("messages", "tools", "options", "tool_calls", "raw_stats")
 COLUMNS = (("id", "started_at", "first_token_at", "ended_at", "status", "stream", "was_loaded",
@@ -88,7 +90,7 @@ UPSERT = (f"INSERT INTO requests ({', '.join(COLUMNS)}) VALUES "
           + ", ".join(f"{c} = EXCLUDED.{c}" for c in COLUMNS if c != "id"))
 
 # What the History list needs (no full texts); the detail view loads one row in full.
-LIST_COLUMNS = ("id, started_at, ended_at, status, model, endpoint, client, preview, error, "
+LIST_COLUMNS = ("id, started_at, ended_at, status, model, endpoint, client, app, preview, error, "
                 "left(content, 200) AS content_preview, " + ", ".join(STAT_COLUMNS))
 
 
@@ -326,8 +328,8 @@ class PgStore:
             if val:
                 where.append(f"{col} = %({col})s")
                 params[col] = val
-        if client:
-            where.append("client ILIKE %(client)s")
+        if client:                            # matches the app name or the address
+            where.append("(client ILIKE %(client)s OR app ILIKE %(client)s)")
             params["client"] = _like(client)
         if q:
             # whole words via the full-text index, or any substring of the preview/response
@@ -401,9 +403,10 @@ class PgStore:
                    count(*) FILTER (WHERE cold_load) AS cold_loads
             FROM requests WHERE {scope}""", p))[0]
         clients = await self._read(f"""
-            SELECT regexp_replace(coalesce(client, '?'), ':[0-9]+$', '') AS client,
+            SELECT coalesce(app, regexp_replace(coalesce(client, '?'), ':[0-9]+$', '')) AS client,
+                   app IS NOT NULL AS is_app,
                    count(*) AS requests, coalesce(sum(output_tokens), 0) AS output_tokens
-            FROM requests WHERE {scope} GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10""", p)
+            FROM requests WHERE {scope} GROUP BY 1, 2 ORDER BY 3 DESC, 1 LIMIT 10""", p)
         # Colors follow the model: order every model by when it was first seen, so a new model
         # or a filter never repaints the others.
         order = [r["model"] for r in await self._read(

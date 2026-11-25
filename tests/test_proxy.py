@@ -228,3 +228,20 @@ async def test_ollama_unreachable():
         assert r.status_code == 502
     events = drain(sub)
     assert [e["type"] for e in events] == ["started", "error"]
+
+
+async def test_app_name_from_headers(setup):
+    client, hub, sub, _ = setup
+    body = {"model": "m:1b", "messages": [], "stream": False}
+    await client.post("/api/chat", json=body, headers={
+        "x-litellm-user_api_key_alias": "file-organizer-agent",
+        "x-litellm-user_api_key_hash": "secret-ish-hash", "x-api-key": "sk-should-not-be-kept"})
+    started = drain(sub)[0]
+    assert started["app"] == "file-organizer-agent"
+    assert "sk-should-not-be-kept" not in json.dumps(started)       # only the one value is kept
+    assert "secret-ish-hash" not in json.dumps(started)
+    await client.post("/api/chat", json=body, headers={"X-Lltop-App": "summ\x07arize",
+                                                       "x-litellm-user_api_key_alias": "other"})
+    assert drain(sub)[0]["app"] == "summarize"                       # X-Lltop-App wins; cleaned
+    await client.post("/api/chat", json=body)
+    assert drain(sub)[0]["app"] is None

@@ -192,7 +192,12 @@ async def test_stats_for_the_charts(store):
     k = d["kpis"]
     assert (k["requests"], k["failed"], k["output_tokens"]) == (3, 1, 30)
     assert k["ttft"] == pytest.approx(20.0)                              # finished only
-    assert d["clients"][0] == {"client": "192.168.4.210", "requests": 3, "output_tokens": 30}
+    assert d["clients"][0] == {"client": "192.168.4.210", "is_app": False, "requests": 3, "output_tokens": 30}
+    store.record(record(5, ts=now - 60, model="smart", app="agent"))
+    await written(store, 5)
+    who = {c["client"]: c["is_app"] for c in (await store.stats("24h", None, "UTC"))["clients"]}
+    assert who == {"192.168.4.210": False, "agent": True}
+    assert [r["app"] for r in (await store.search(client="age"))["rows"]] == ["agent"]
     only = await store.stats("7d", "fast", "Not/AZone")                  # bad tz -> UTC
     assert only["tz"] == "UTC" and only["unit"] == "6h" and only["models"] == ["fast"]
     assert only["kpis"]["requests"] == 1

@@ -42,7 +42,25 @@ def quietly(tap: Tap | None, method: str, *args) -> None:
         log.exception("tap.%s failed; the request continues", method)
 
 
-def make_tap(hub, request: Request) -> Tap | None:
+# Which app sent a request, first header found wins. X-Lltop-App is for any caller to set;
+# LiteLLM sends the x-litellm-* ones (the virtual key's alias, ...) when configured with
+# add_user_information_to_llm_headers. Only this one value is kept, never other headers.
+APP_HEADERS = ("x-lltop-app", "x-litellm-user_api_key_alias", "x-litellm-user_api_key_team_alias",
+               "x-litellm-user_api_key_end_user_id")
+MAX_APP = 80
+
+
+def app_from_headers(headers, names=APP_HEADERS) -> str | None:
+    for name in names:
+        value = headers.get(name)
+        if value:
+            value = "".join(ch for ch in value.strip() if ch.isprintable())[:MAX_APP]
+            if value:
+                return value
+    return None
+
+
+def make_tap(hub, request: Request, app_headers=APP_HEADERS) -> Tap | None:
     if request.method != "POST" or request.url.path not in ENDPOINTS:
         return None
     try:
@@ -50,7 +68,7 @@ def make_tap(hub, request: Request) -> Tap | None:
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
             client = f"{forwarded} (via {client})"
-        return Tap(hub, request.url.path, client)
+        return Tap(hub, request.url.path, client, app=app_from_headers(request.headers, app_headers))
     except Exception:
         log.exception("could not create a tap; forwarding without inspection")
         return None
@@ -111,8 +129,8 @@ async def send_unless_caller_leaves(client: httpx.AsyncClient, upstream_request,
     return None
 
 
-async def forward(request: Request, client: httpx.AsyncClient, hub):
-    tap = make_tap(hub, request)
+async def forward(request: Request, client: httpx.AsyncClient, hub, app_headers=APP_HEADERS):
+    tap = make_tap(hub, request, app_headers)
     headers = [(k, v) for k, v in request.headers.items() if k.lower() not in REQUEST_SKIP]
     if tap:
         body = await request.body()      # small JSON; the tap needs to read it

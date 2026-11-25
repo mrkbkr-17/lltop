@@ -138,7 +138,7 @@
     <h2>Last finished requests <span class="muted" id="recent-count"></span></h2>
     <table>
       <thead><tr>
-        <th>Time</th><th>Model</th><th>Endpoint</th><th>Client</th><th>Status</th>
+        <th>Time</th><th>Model</th><th>Endpoint</th><th>App / client</th><th>Status</th>
         <th class="num">Prompt tok</th><th class="num">Output tok</th><th class="num">TTFT</th>
         <th class="num">Prompt tok/s</th><th class="num">Output tok/s</th><th class="num">Total</th><th>Load</th>
       </tr></thead>
@@ -167,13 +167,13 @@
       <select id="f-model"><option value="">all models</option></select>
       <select id="f-status"><option value="">any status</option></select>
       <select id="f-endpoint"><option value="">all endpoints</option></select>
-      <input id="f-client" placeholder="client (e.g. 172.22)" size="14">
+      <input id="f-client" placeholder="app or client" size="14">
       <input id="f-q" type="search" placeholder="search prompts and responses…">
       <button id="f-new" class="hidden"></button>
     </div>
     <table>
       <thead><tr>
-        <th>Time</th><th>Model</th><th>Endpoint</th><th>Client</th><th>Status</th><th>Prompt</th>
+        <th>Time</th><th>Model</th><th>Endpoint</th><th>App / client</th><th>Status</th><th>Prompt</th>
         <th class="num">Prompt tok</th><th class="num">Output tok</th><th class="num">TTFT</th>
         <th class="num">Prompt tok/s</th><th class="num">Output tok/s</th><th class="num">Total</th><th>Load</th>
       </tr></thead>
@@ -331,7 +331,9 @@ function buildRequest(r) {
   e.phase = el("span", "phase");
   e.elapsed = el("span");
   e.rate = el("span");
-  e.head.append(e.phase, el("span", null, r.endpoint), el("span", null, r.client || ""), e.elapsed, e.rate);
+  const who = el("span", null, r.app ? r.app : (r.client || ""));
+  if (r.app) { who.style.fontWeight = "600"; who.title = r.client || ""; }
+  e.head.append(e.phase, el("span", null, r.endpoint), who, e.elapsed, e.rate);
   e.append(e.head, el("div", "label", r.prompt != null ? "prompt" : "last user message"),
            el("div", "text prompt", promptSummary(r)), requestDetails(r));
   e.thinkLabel = el("div", "label", "thinking");
@@ -388,7 +390,7 @@ function fmtWhen(ts) {
 function rowCells(r, withPreview) {
   const s = r.stats || {};
   const cells = [
-    [withPreview ? fmtWhen(r.ts) : fmtTime(r.ts)], [r.model || "?"], [r.endpoint], [r.client || ""],
+    [withPreview ? fmtWhen(r.ts) : fmtTime(r.ts)], [r.model || "?"], [r.endpoint], [r.app || r.client || ""],
     [r.status, "status-" + r.status],
   ];
   if (withPreview) cells.push([r.preview || "", "preview"]);
@@ -401,6 +403,7 @@ function rowCells(r, withPreview) {
   const tr = el("tr", "row");
   for (const [text, cls] of cells) tr.append(el("td", cls || "", text));
   if (s.rate_source === "chunks") tr.title = "* estimated from chunk timing (no Ollama durations on /v1)";
+  if (r.app) tr.children[3].title = "app " + r.app + " · from " + (r.client || "?");
   if (withPreview && r.preview) tr.children[5].title = r.preview;
   return tr;
 }
@@ -881,9 +884,9 @@ function renderCharts() {
     chartCard("Wait for first token", "median; includes Ollama's queue and model loads" + (one ? " · " + one : ""), legendLine,
               (b, w) => lineChart(b, w, d, "ttft", (v) => fmtCompact(v) + "s", fmtSec),
               () => dataTable(bucketCols, bucketRows("ttft", fmtSec))),
-    chartCard("Who uses the models", "requests by client address", null,
+    chartCard("Who uses the models", "requests by app (address when the app is unnamed)", null,
               (b, w) => rankedBars(b, w, d.clients),
-              () => dataTable([{ label: "Client" }, { label: "Requests", num: true }, { label: "Output tokens", num: true }],
+              () => dataTable([{ label: "App / client" }, { label: "Requests", num: true }, { label: "Output tokens", num: true }],
                               d.clients.map((c) => [c.client, fmtNum(c.requests), fmtNum(c.output_tokens)]))),
   ];
   $("c-charts").replaceChildren(...cards);

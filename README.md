@@ -68,6 +68,7 @@ and open the dashboard at <http://127.0.0.1:11435/lltop/>.
 | `--poll` | `LLTOP_POLL` | `3` | Seconds between `/api/ps` polls. |
 | `--history` | `LLTOP_HISTORY` | `~/.local/state/lltop/history.json` | Where the last 50 requests are saved. `--no-history` keeps them in memory only. |
 | `--pg-dsn` | `LLTOP_PG_DSN` | off | PostgreSQL for the full history, e.g. `postgresql://lltop@localhost:5432/lltop`. Password in `~/.pgpass`, not here. |
+| `--app-headers` | `LLTOP_APP_HEADERS` | see below | Request headers that name the calling app. |
 | `--log-level` | `LLTOP_LOG_LEVEL` | `info` | |
 
 ### Docker
@@ -81,6 +82,26 @@ docker run --rm -p 127.0.0.1:11435:11435 -v lltop-data:/data \
 The image listens on all interfaces inside the container and expects Ollama at
 `http://host.docker.internal:11434` (set `LLTOP_UPSTREAM` otherwise, e.g.
 `http://ollama:11434` when both run on the same Docker network).
+
+### Naming the calling app
+
+lltop labels each request with the app that sent it, from the first of these request
+headers it finds (only that one value is kept; other headers are never stored):
+
+- `X-Lltop-App: my-script` - any caller can set it; Ollama ignores it.
+- `x-litellm-user_api_key_alias` (then `..._team_alias`, `..._end_user_id`) - sent by a
+  [LiteLLM](https://github.com/BerriAI/litellm) gateway, so requests show the virtual
+  key's name instead of the gateway's address. In LiteLLM's `config.yaml`, scoped to your
+  local model groups so key details aren't sent to cloud providers:
+
+  ```yaml
+  litellm_settings:
+    add_user_information_to_llm_headers: true
+    model_group_settings:
+      forward_client_headers_to_llm_api: ["fast", "smart"]   # your Ollama model groups
+  ```
+
+Without a name, the client address is shown.
 
 ### History in PostgreSQL (optional)
 
@@ -201,8 +222,6 @@ Ollama.
 ## Roadmap
 
 - Retention settings (delete history older than N days).
-- Which app is behind a gateway's requests (e.g. LiteLLM's `user` or key alias), so
-  "who uses the models" shows apps instead of one gateway address.
 - A React dashboard.
 - Running as the default endpoint in front of Ollama for other gateways.
 

@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from .history import History, save_forever, save_now
 from .store import PgStore
 from .hub import Hub
-from .proxy import forward
+from .proxy import APP_HEADERS, forward
 from .ps import poll_forever
 
 log = logging.getLogger("lltop")
@@ -56,7 +56,7 @@ async def merge_from_postgres(store: PgStore, hub: Hub) -> None:
 def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float = 3.0,
                transport: httpx.AsyncBaseTransport | None = None, hub: Hub | None = None,
                start_poller: bool = True, history_path: str | Path | None = None,
-               pg_dsn: str | None = None) -> FastAPI:
+               pg_dsn: str | None = None, app_headers: tuple[str, ...] | None = None) -> FastAPI:
     hub = hub or Hub()
     history = History(history_path) if history_path else None
     if history:
@@ -194,6 +194,6 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
 
     @app.api_route("/{path:path}", methods=METHODS, include_in_schema=False)
     async def proxy(request: Request):
-        return await forward(request, client, hub)
+        return await forward(request, client, hub, app_headers or APP_HEADERS)
 
     return app

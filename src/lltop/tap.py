@@ -113,8 +113,10 @@ def describe_request(kind: str, body: dict) -> dict:
 
 
 class Tap:
-    def __init__(self, hub, path: str, client: str | None, clock=time.monotonic):
+    def __init__(self, hub, path: str, client: str | None, clock=time.monotonic,
+                 app: str | None = None):
         self.hub = hub
+        self.app = app
         self.kind = ENDPOINTS[path]
         self.path = path
         self.client = client
@@ -149,7 +151,7 @@ class Tap:
         info = describe_request(self.kind, data if isinstance(data, dict) else {})
         self.model = info["model"]
         self.was_loaded = self.hub.model_loaded(self.model)
-        self._emit("started", endpoint=self.path, api=self.kind, client=self.client,
+        self._emit("started", endpoint=self.path, api=self.kind, client=self.client, app=self.app,
                    was_loaded=self.was_loaded, **info)
 
     # ------------------------------------------------------------ response side

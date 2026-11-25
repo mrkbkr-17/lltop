@@ -29,6 +29,10 @@ def main() -> None:
                    help="Postgres connection string for the full, searchable history (env "
                         "LLTOP_PG_DSN, e.g. postgresql://lltop@localhost:5432/lltop; put the "
                         "password in ~/.pgpass, not here). Off when unset.")
+    p.add_argument("--app-headers", default=os.environ.get("LLTOP_APP_HEADERS"),
+                   help="comma-separated request headers that name the calling app, first found "
+                        "wins (env LLTOP_APP_HEADERS; default: x-lltop-app and LiteLLM's "
+                        "x-litellm-user_api_key_alias, ..._team_alias, ..._end_user_id)")
     p.add_argument("--log-level", default=os.environ.get("LLTOP_LOG_LEVEL", "info"))
     args = p.parse_args()
 
@@ -43,7 +47,9 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(max(logging.WARNING, logging.getLogger().level))
     history = None if args.no_history else (args.history or default_path())
     app = create_app(args.upstream.rstrip("/"), poll_interval=args.poll, history_path=history,
-                     pg_dsn=args.pg_dsn or None)
+                     pg_dsn=args.pg_dsn or None,
+                     app_headers=tuple(h.strip().lower() for h in args.app_headers.split(",") if h.strip())
+                     if args.app_headers else None)
     # Don't wait for long generations to finish when stopping: after 5 s the connections
     # are closed, running requests are saved as 'interrupted', and lltop exits.
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level.lower(),
