@@ -1,8 +1,8 @@
-"""The FastAPI app: the dashboard under /lens/, everything else forwarded to Ollama.
+"""The FastAPI app: the dashboard under /lltop/, everything else forwarded to Ollama.
 
-    /lens/            the dashboard page
-    /lens/ws          WebSocket: a snapshot on connect, then every event live
-    /lens/api/state   the same snapshot as JSON (handy with curl)
+    /lltop/            the dashboard page
+    /lltop/ws          WebSocket: a snapshot on connect, then every event live
+    /lltop/api/state   the same snapshot as JSON (handy with curl)
     anything else     forwarded to Ollama unchanged (proxy.forward)
 """
 
@@ -19,7 +19,7 @@ from .hub import Hub
 from .proxy import forward
 from .ps import poll_forever
 
-log = logging.getLogger("ollama_lens")
+log = logging.getLogger("lltop")
 
 STATIC = Path(__file__).parent / "static"
 METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
@@ -37,31 +37,31 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
     @asynccontextmanager
     async def lifespan(app):
         task = asyncio.create_task(poll_forever(client, hub, poll_interval)) if start_poller else None
-        log.info("ollama-lens: forwarding to %s; dashboard at /lens/", upstream)
+        log.info("lltop: forwarding to %s; dashboard at /lltop/", upstream)
         yield
         if task:
             task.cancel()
         await client.aclose()
 
     # No /docs or /openapi.json: those paths belong to Ollama (forwarded like the rest).
-    app = FastAPI(title="ollama-lens", lifespan=lifespan,
+    app = FastAPI(title="lltop", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.hub = hub
     app.state.client = client
 
-    @app.get("/lens", include_in_schema=False)
-    async def lens_redirect():
-        return RedirectResponse("/lens/")
+    @app.get("/lltop", include_in_schema=False)
+    async def dashboard_redirect():
+        return RedirectResponse("/lltop/")
 
-    @app.get("/lens/", include_in_schema=False)
+    @app.get("/lltop/", include_in_schema=False)
     async def dashboard():
         return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
 
-    @app.get("/lens/api/state", include_in_schema=False)
+    @app.get("/lltop/api/state", include_in_schema=False)
     async def state():
         return JSONResponse({**hub.snapshot(), "upstream": upstream})
 
-    @app.websocket("/lens/ws")
+    @app.websocket("/lltop/ws")
     async def events(ws: WebSocket):
         await ws.accept()
         sub = hub.subscribe()

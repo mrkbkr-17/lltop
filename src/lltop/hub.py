@@ -15,7 +15,7 @@ import logging
 import time
 from collections import deque
 
-log = logging.getLogger("ollama_lens")
+log = logging.getLogger("lltop")
 
 RECENT_MAX = 50
 QUEUE_MAX = 5000            # events buffered per browser before it is dropped

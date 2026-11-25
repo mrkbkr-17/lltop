@@ -22,7 +22,7 @@ import uuid
 from . import stats
 from .streams import LineSplitter, merge_final, ollama_delta, openai_delta, sse_data
 
-log = logging.getLogger("ollama_lens")
+log = logging.getLogger("lltop")
 
 MAX_FIELD = 100_000      # characters kept per prompt/message in the started event
 MAX_BODY = 16 * 1024 * 1024
@@ -50,7 +50,7 @@ def safe(method):
             if not self.done:           # so the dashboard doesn't show it running forever
                 self.done = True
                 try:
-                    self._emit("error", error=f"ollama-lens stopped following this request "
+                    self._emit("error", error=f"lltop stopped following this request "
                                               f"({type(e).__name__}); the caller was not affected")
                 except Exception:
                     pass

@@ -1,6 +1,6 @@
 import pytest
 
-from ollama_lens.stats import is_cold_load, per_second, summarize
+from lltop.stats import is_cold_load, per_second, summarize
 
 
 def test_per_second():

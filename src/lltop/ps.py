@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 
-log = logging.getLogger("ollama_lens")
+log = logging.getLogger("lltop")
 
 
 def model_info(m: dict) -> dict:

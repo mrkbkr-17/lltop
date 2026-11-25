@@ -1,10 +1,12 @@
-# ollama-lens
+# lltop
+
+*Like `htop`, but for LLMs.*
 
 A live monitoring dashboard for [Ollama](https://ollama.com). Put it in front of Ollama
 and watch every request as it happens: which model, who sent it, the prompt, the thinking
 and the response appearing token by token, then the final speed and timing numbers.
 
-It is a **streaming reverse proxy**. Clients talk to ollama-lens exactly as they would
+It is a **streaming reverse proxy**. Clients talk to lltop exactly as they would
 talk to Ollama; every request is forwarded unchanged and every response chunk is passed
 straight back. A copy of each chunk goes to the dashboard.
 
@@ -32,9 +34,9 @@ doing right now, which app is using it, and how fast it really is.
 Requires [uv](https://docs.astral.sh/uv/) and a running Ollama.
 
 ```sh
-git clone https://github.com/mrkbkr-17/ollama-lens.git
-cd ollama-lens
-uv run ollama-lens
+git clone https://github.com/mrkbkr-17/lltop.git
+cd lltop
+uv run lltop
 ```
 
 Point a client at port **11435** instead of 11434:
@@ -46,46 +48,46 @@ curl http://127.0.0.1:11435/api/chat -d '{
 }'
 ```
 
-and open the dashboard at <http://127.0.0.1:11435/lens/>.
+and open the dashboard at <http://127.0.0.1:11435/lltop/>.
 
 ### Options
 
 | Flag | Environment | Default | |
 |---|---|---|---|
-| `--host` | `LENS_HOST` | `127.0.0.1` | Address to listen on. `0.0.0.0` exposes it to your network. |
-| `--port` | `LENS_PORT` | `11435` | |
-| `--upstream` | `LENS_UPSTREAM` | `http://127.0.0.1:11434` | Where Ollama is. |
-| `--poll` | `LENS_POLL` | `3` | Seconds between `/api/ps` polls. |
-| `--log-level` | `LENS_LOG_LEVEL` | `info` | |
+| `--host` | `LLTOP_HOST` | `127.0.0.1` | Address to listen on. `0.0.0.0` exposes it to your network. |
+| `--port` | `LLTOP_PORT` | `11435` | |
+| `--upstream` | `LLTOP_UPSTREAM` | `http://127.0.0.1:11434` | Where Ollama is. |
+| `--poll` | `LLTOP_POLL` | `3` | Seconds between `/api/ps` polls. |
+| `--log-level` | `LLTOP_LOG_LEVEL` | `info` | |
 
 ### Docker
 
 ```sh
-docker build -t ollama-lens .
+docker build -t lltop .
 docker run --rm -p 127.0.0.1:11435:11435 \
-  --add-host=host.docker.internal:host-gateway ollama-lens
+  --add-host=host.docker.internal:host-gateway lltop
 ```
 
 The image listens on all interfaces inside the container and expects Ollama at
-`http://host.docker.internal:11434` (set `LENS_UPSTREAM` otherwise, e.g.
+`http://host.docker.internal:11434` (set `LLTOP_UPSTREAM` otherwise, e.g.
 `http://ollama:11434` when both run on the same Docker network).
 
 ## Privacy
 
 The dashboard shows every prompt and response in full, to anyone who can open the page.
-Nothing is written to disk and nothing leaves the machine, but by default ollama-lens
+Nothing is written to disk and nothing leaves the machine, but by default lltop
 only listens on `127.0.0.1` for that reason. Only use `--host 0.0.0.0` on a network you
 trust: there is no login.
 
 ## How it works
 
 ```
-  client ──HTTP──▶ ollama-lens :11435 ──HTTP──▶ Ollama :11434
+  client ──HTTP──▶ lltop :11435 ──HTTP──▶ Ollama :11434
     ▲                 │   ▲                        │
     └──── chunks ◀────┤   └──────── chunks ◀───────┘
                       │ copy of each chunk
                       ▼
-                    Tap ──events──▶ Hub ──WebSocket──▶ dashboard (/lens/)
+                    Tap ──events──▶ Hub ──WebSocket──▶ dashboard (/lltop/)
                                      ▲
                        /api/ps poller┘
 ```
@@ -113,18 +115,18 @@ trust: there is no login.
   request still reaches Ollama and returns normally; the dashboard marks it as an error.
 - **No added latency.** Chunks go to the caller before anything else looks at them, and
   publishing an event never waits for a browser.
-- **Cancellation passes through.** When a caller hangs up, ollama-lens closes its
+- **Cancellation passes through.** When a caller hangs up, lltop closes its
   connection to Ollama, so Ollama stops generating, also while still waiting for the
   first token.
-- **Transparent.** Everything outside `/lens/` belongs to Ollama, including `/`.
+- **Transparent.** Everything outside `/lltop/` belongs to Ollama, including `/`.
 
 ### Endpoints of its own
 
 | Path | |
 |---|---|
-| `/lens/` | The dashboard |
-| `/lens/ws` | WebSocket: a `snapshot` on connect, then every event |
-| `/lens/api/state` | The snapshot as JSON |
+| `/lltop/` | The dashboard |
+| `/lltop/ws` | WebSocket: a `snapshot` on connect, then every event |
+| `/lltop/api/state` | The snapshot as JSON |
 
 ## Development
 

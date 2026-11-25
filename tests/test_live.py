@@ -13,8 +13,8 @@ import pytest
 import uvicorn
 
 from conftest import drain
-from ollama_lens.app import create_app
-from ollama_lens.hub import Hub
+from lltop.app import create_app
+from lltop.hub import Hub
 
 pytestmark = pytest.mark.anyio
 
@@ -84,8 +84,8 @@ async def serve(app):
 async def stack():
     fake, hub = FakeOllama(), Hub()
     async with serve(fake) as ollama_url:
-        async with serve(create_app(ollama_url, hub=hub, start_poller=False)) as lens_url:
-            yield fake, hub, lens_url
+        async with serve(create_app(ollama_url, hub=hub, start_poller=False)) as proxy_url:
+            yield fake, hub, proxy_url
 
 
 async def wait_for(event_type, sub, timeout=3.0) -> list[dict]:

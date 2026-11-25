@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from ollama_lens.streams import (LineSplitter, LineTooLong, merge_final, ollama_delta,
+from lltop.streams import (LineSplitter, LineTooLong, merge_final, ollama_delta,
                                  openai_delta, sse_data)
 
 

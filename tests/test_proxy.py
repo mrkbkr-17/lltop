@@ -11,9 +11,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from conftest import drain
-from ollama_lens.app import create_app
-from ollama_lens.hub import Hub
-from ollama_lens.tap import Tap
+from lltop.app import create_app
+from lltop.hub import Hub
+from lltop.tap import Tap
 
 pytestmark = pytest.mark.anyio
 
@@ -83,10 +83,10 @@ def fake_ollama() -> FastAPI:
 def setup():
     upstream = fake_ollama()
     hub = Hub()
-    lens = create_app("http://ollama", transport=httpx.ASGITransport(app=upstream),
+    proxy_app = create_app("http://ollama", transport=httpx.ASGITransport(app=upstream),
                       hub=hub, start_poller=False)
-    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=lens, client=("10.0.0.7", 5555)),
-                               base_url="http://lens")
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy_app, client=("10.0.0.7", 5555)),
+                               base_url="http://lltop")
     return client, hub, hub.subscribe(), upstream
 
 
@@ -218,10 +218,10 @@ async def test_ollama_unreachable():
     def refuse(request):
         raise httpx.ConnectError("connection refused")
     hub = Hub()
-    lens = create_app("http://ollama", transport=httpx.MockTransport(refuse), hub=hub,
+    proxy_app = create_app("http://ollama", transport=httpx.MockTransport(refuse), hub=hub,
                       start_poller=False)
     sub = hub.subscribe()
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=lens), base_url="http://lens") as c:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy_app), base_url="http://lltop") as c:
         r = await c.post("/api/chat", json={"model": "m:1b", "messages": []})
         assert r.status_code == 502 and "could not reach Ollama" in r.json()["error"]
         r = await c.get("/api/tags")

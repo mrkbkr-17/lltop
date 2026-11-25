@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ollama-lens</title>
+<title>lltop</title>
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #677085; --line: #e1e4ea;
@@ -70,7 +70,7 @@
 </head>
 <body>
 <header>
-  <h1>ollama-lens</h1>
+  <h1>lltop</h1>
   <span><span id="conn-dot" class="dot"></span><span id="conn">connecting…</span></span>
   <span class="muted" id="upstream"></span>
   <span class="muted" id="ps"></span>
@@ -384,7 +384,7 @@ handlers.finished = handlers.error = handlers.cancelled = handlers.end;
 // -------------------------------------------------------------- websocket
 let retry = 1000;
 function connect() {
-  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/lens/ws");
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/lltop/ws");
   ws.onopen = () => { retry = 1000; $("conn").textContent = "live"; $("conn-dot").className = "dot live"; };
   ws.onmessage = (m) => {
     try {

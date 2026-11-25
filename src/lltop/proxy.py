@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .tap import ENDPOINTS, Tap
 
-log = logging.getLogger("ollama_lens")
+log = logging.getLogger("lltop")
 
 # Headers that describe one connection, not the message: never forwarded (RFC 9110 7.6.1).
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -132,7 +132,7 @@ async def forward(request: Request, client: httpx.AsyncClient, hub):
         else:
             upstream = await client.send(upstream_request, stream=True)
     except httpx.HTTPError as e:
-        message = f"ollama-lens: could not reach Ollama at {client.base_url}: {type(e).__name__}: {e}"
+        message = f"lltop: could not reach Ollama at {client.base_url}: {type(e).__name__}: {e}"
         quietly(tap, "fail", message)
         log.warning(message)
         return JSONResponse({"error": message}, status_code=502)
