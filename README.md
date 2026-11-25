@@ -13,8 +13,8 @@ straight back. A copy of each chunk goes to the dashboard.
 Useful when Ollama is slow (CPU-only machines, big models) and you want to know what it is
 doing right now, which app is using it, and how fast it really is.
 
-> Status: milestone 1. History is kept in memory (last 50 requests); persistent history
-> comes later.
+> Status: milestone 1. The last 50 requests are kept, also across restarts (a JSON file);
+> a full history in a database comes later.
 
 ## What it shows
 
@@ -25,7 +25,7 @@ doing right now, which app is using it, and how fast it really is.
   time, phase (reading prompt / thinking / generating), the prompt (plus the whole
   conversation, tools and options), and the thinking and response text as it streams,
   with a live tokens/s estimate.
-- **The last 50 finished requests**: prompt and output tokens, time to first token,
+- **The last 50 finished requests** (saved to a file, so a restart keeps them): prompt and output tokens, time to first token,
   prompt and output tokens/s, total time, cold or warm model load, status (finished,
   error, cancelled). Click a row for the full prompt, response and Ollama's raw stats.
 
@@ -58,13 +58,14 @@ and open the dashboard at <http://127.0.0.1:11435/lltop/>.
 | `--port` | `LLTOP_PORT` | `11435` | |
 | `--upstream` | `LLTOP_UPSTREAM` | `http://127.0.0.1:11434` | Where Ollama is. |
 | `--poll` | `LLTOP_POLL` | `3` | Seconds between `/api/ps` polls. |
+| `--history` | `LLTOP_HISTORY` | `~/.local/state/lltop/history.json` | Where the last 50 requests are saved. `--no-history` keeps them in memory only. |
 | `--log-level` | `LLTOP_LOG_LEVEL` | `info` | |
 
 ### Docker
 
 ```sh
 docker build -t lltop .
-docker run --rm -p 127.0.0.1:11435:11435 \
+docker run --rm -p 127.0.0.1:11435:11435 -v lltop-data:/data \
   --add-host=host.docker.internal:host-gateway lltop
 ```
 
@@ -91,8 +92,9 @@ logged out: `sudo loginctl enable-linger $USER`.
 ## Privacy
 
 The dashboard shows every prompt and response in full, to anyone who can open the page.
-Nothing is written to disk and nothing leaves the machine, but by default lltop
-only listens on `127.0.0.1` for that reason. Only use `--host 0.0.0.0` on a network you
+Nothing leaves the machine. The last 50 requests, prompts and responses included, are
+saved in the history file, readable by its owner only (mode 0600; `--no-history` to
+turn it off). By default lltop only listens on `127.0.0.1` for that reason. Only use `--host 0.0.0.0` on a network you
 trust: there is no login.
 
 ## How it works
@@ -121,7 +123,8 @@ trust: there is no login.
   didn't list the model as the request started). `/v1/chat/completions` reports no
   durations, so its output speed is estimated from chunk timing (marked `*`).
 - **Hub** (`hub.py`): the in-memory state (loaded models, requests in progress, last 50)
-  and the fan-out to browsers. Each browser gets its own bounded queue; one that falls
+  and the fan-out to browsers. `history.py` saves the last 50 to a JSON file (at most
+  every 2 s, and on shutdown, when requests still running are kept as `interrupted`). Each browser gets its own bounded queue; one that falls
   behind is disconnected and reconnects to a fresh snapshot.
 
 ### Design rules

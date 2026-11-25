@@ -1,7 +1,7 @@
 # lltop: streaming proxy in front of Ollama with a live dashboard.
 #
 #   docker build -t lltop .
-#   docker run --rm -p 127.0.0.1:11435:11435 \
+#   docker run --rm -p 127.0.0.1:11435:11435 -v lltop-data:/data \
 #     --add-host=host.docker.internal:host-gateway lltop
 #
 # LLTOP_UPSTREAM is where Ollama is, as seen from inside the container.
@@ -17,13 +17,16 @@ COPY src ./src
 RUN uv sync --locked --no-dev --no-editable
 
 FROM python:3.12-slim
-RUN useradd --system --uid 10001 lltop
+RUN useradd --system --uid 10001 lltop && mkdir /data && chown lltop /data && chmod 700 /data
 COPY --from=build /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     LLTOP_HOST=0.0.0.0 \
     LLTOP_PORT=11435 \
-    LLTOP_UPSTREAM=http://host.docker.internal:11434
+    LLTOP_UPSTREAM=http://host.docker.internal:11434 \
+    LLTOP_HISTORY=/data/history.json
+# The last 50 requests (prompts and responses) survive restarts if /data is a volume.
+VOLUME /data
 USER lltop
 EXPOSE 11435
 HEALTHCHECK --interval=30s --timeout=5s CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"LLTOP_PORT\"]}/lltop/api/state', timeout=4)"]

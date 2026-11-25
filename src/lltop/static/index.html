@@ -60,7 +60,7 @@
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   tr.row { cursor: pointer; } tr.row:hover td { background: var(--code); }
   tr.detail td { white-space: normal; background: var(--bg); }
-  .status-finished { color: var(--ok); } .status-error { color: var(--bad); } .status-cancelled { color: var(--warn); }
+  .status-finished { color: var(--ok); } .status-error { color: var(--bad); } .status-cancelled, .status-interrupted { color: var(--warn); }
   .cold { color: var(--warn); font-weight: 600; }
   .empty { color: var(--muted); padding: 10px 0; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -332,7 +332,7 @@ function recentRow(r) {
 function renderRecent() {
   $("recent").replaceChildren(...recent.flatMap(recentRow));
   $("no-recent").style.display = recent.length ? "none" : "";
-  $("recent-count").textContent = recent.length ? "(" + recent.length + ", in memory only)" : "";
+  $("recent-count").textContent = recent.length ? "(" + recent.length + ")" : "";
 }
 
 // ---------------------------------------------------------------- events
@@ -379,7 +379,7 @@ const handlers = {
     renderModels(); renderRecent();
   },
 };
-handlers.finished = handlers.error = handlers.cancelled = handlers.end;
+handlers.finished = handlers.error = handlers.cancelled = handlers.interrupted = handlers.end;
 
 // -------------------------------------------------------------- websocket
 let retry = 1000;

@@ -5,9 +5,9 @@ blocks and never raises: each browser has its own bounded queue, and a browser t
 falls too far behind is dropped (it reconnects and gets a fresh snapshot). A slow or
 broken dashboard can therefore never slow down a request going to Ollama.
 
-State is in memory only (milestone 1): loaded models from /api/ps, requests in
-progress (with the text generated so far, so a browser that opens mid-request sees
-it all), and the last RECENT_MAX finished requests.
+State: loaded models from /api/ps, requests in progress (with the text generated so
+far, so a browser that opens mid-request sees it all), and the last RECENT_MAX finished
+requests. Those can be saved to a file (history.py) so they survive a restart.
 """
 
 import asyncio
@@ -44,6 +44,7 @@ class Hub:
         self.recent: deque[dict] = deque(maxlen=recent_max)
         self.subscribers: set[Subscriber] = set()
         self.queue_max = queue_max
+        self.dirty = False                   # recent changed since the last save
 
     # ------------------------------------------------------------------ browsers
 
@@ -94,7 +95,7 @@ class Hub:
             req["chunks"] += 1
             if req["first_token_ts"] is None:
                 req["first_token_ts"] = ev["ts"]
-        elif kind in ("finished", "error", "cancelled"):
+        elif kind in ("finished", "error", "cancelled", "interrupted"):
             req = self.active.pop(ev["id"], None)
             if req is None:
                 return
@@ -102,10 +103,18 @@ class Hub:
             req["status"] = kind
             req["ended_ts"] = ev["ts"]
             self.recent.appendleft(req)
+            self.dirty = True
         elif kind == "models":
             self.models = ev["models"]
             self.ps_ok = ev.get("ok")
             self.ps_error = ev.get("error")
+
+    def interrupt_active(self) -> None:
+        """lltop is stopping: keep requests still in progress as 'interrupted'."""
+        now = time.time()
+        for req in list(self.active.values()):
+            self.publish({"type": "interrupted", "id": req["id"], "ts": now,
+                          "error": "lltop stopped while this request was in progress"})
 
     # ------------------------------------------------------------------ helpers
 

@@ -15,6 +15,7 @@ import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
+from .history import History, save_forever, save_now
 from .hub import Hub
 from .proxy import forward
 from .ps import poll_forever
@@ -27,8 +28,12 @@ METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
 def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float = 3.0,
                transport: httpx.AsyncBaseTransport | None = None, hub: Hub | None = None,
-               start_poller: bool = True) -> FastAPI:
+               start_poller: bool = True, history_path: str | Path | None = None) -> FastAPI:
     hub = hub or Hub()
+    history = History(history_path) if history_path else None
+    if history:
+        # newest first, like hub.recent; keep the newest if the file holds more than fits
+        hub.recent.extend(history.load()[:hub.recent.maxlen])
     # No read timeout: on a slow CPU a model can think for minutes between chunks.
     client = httpx.AsyncClient(
         base_url=upstream, transport=transport,
@@ -36,11 +41,19 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
 
     @asynccontextmanager
     async def lifespan(app):
-        task = asyncio.create_task(poll_forever(client, hub, poll_interval)) if start_poller else None
-        log.info("lltop: forwarding to %s; dashboard at /lltop/", upstream)
+        tasks = []
+        if start_poller:
+            tasks.append(asyncio.create_task(poll_forever(client, hub, poll_interval)))
+        if history:
+            tasks.append(asyncio.create_task(save_forever(history, hub)))
+            log.info("history in %s (%d requests loaded)", history.path, len(hub.recent))
+        log.info("forwarding to %s; dashboard at /lltop/", upstream)
         yield
-        if task:
+        for task in tasks:
             task.cancel()
+        if history:
+            hub.interrupt_active()
+            await save_now(history, hub)
         await client.aclose()
 
     # No /docs or /openapi.json: those paths belong to Ollama (forwarded like the rest).
