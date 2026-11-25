@@ -45,6 +45,7 @@ class Hub:
         self.subscribers: set[Subscriber] = set()
         self.queue_max = queue_max
         self.dirty = False                   # recent changed since the last save
+        self.sink = None                     # called with each finished request (store.py)
 
     # ------------------------------------------------------------------ browsers
 
@@ -58,6 +59,7 @@ class Hub:
 
     def snapshot(self) -> dict:
         return {"type": "snapshot", "ts": time.time(), "models": self.models,
+                "history": self.history_status(),
                 "ps_ok": self.ps_ok, "ps_error": self.ps_error,
                 "active": list(self.active.values()), "recent": list(self.recent)}
 
@@ -104,10 +106,19 @@ class Hub:
             req["ended_ts"] = ev["ts"]
             self.recent.appendleft(req)
             self.dirty = True
+            if self.sink is not None:
+                try:
+                    self.sink(req)
+                except Exception:
+                    log.exception("hub: history sink failed")
         elif kind == "models":
             self.models = ev["models"]
             self.ps_ok = ev.get("ok")
             self.ps_error = ev.get("error")
+
+    def history_status(self) -> dict:
+        store = getattr(self.sink, "__self__", None)     # the PgStore behind the sink
+        return store.status() if store is not None else {"enabled": False}
 
     def interrupt_active(self) -> None:
         """lltop is stopping: keep requests still in progress as 'interrupted'."""
