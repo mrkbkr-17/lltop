@@ -173,3 +173,26 @@ async def test_startup_merges_postgres_and_file(store):
     assert [r["id"] for r in hub.recent] == ["req002", "req001", "req000"]
     await written(store, 3)                          # the file-only ones were saved too
     assert (await store.get("req000")) is not None
+
+
+@needs_pg
+async def test_stats_for_the_charts(store):
+    now = time.time()
+    store.record(record(1, ts=now - 3600 * 2, model="smart", stats={"output_tokens": 10, "output_tokens_per_s": 2.0, "ttft_s": 30.0}))
+    store.record(record(2, ts=now - 3600 * 2, model="smart", stats={"output_tokens": 20, "output_tokens_per_s": 4.0, "ttft_s": 10.0}))
+    store.record(record(3, ts=now - 600, model="fast", status="cancelled", stats={"output_tokens": 0}))
+    store.record(record(4, ts=now - 86400 * 3, model="old"))             # outside 24h
+    await written(store, 4)
+    d = await store.stats("24h", None, "America/New_York")
+    assert d["unit"] == "hour" and len(d["buckets"]) == 24
+    assert d["model_order"] == ["old", "smart", "fast"]                  # by first seen
+    assert d["models"] == ["smart", "fast"]
+    assert sum(d["series"]["smart"]["requests"]) == 2
+    assert max(v for v in d["series"]["smart"]["tps"] if v is not None) == pytest.approx(3.0)   # median
+    k = d["kpis"]
+    assert (k["requests"], k["failed"], k["output_tokens"]) == (3, 1, 30)
+    assert k["ttft"] == pytest.approx(20.0)                              # finished only
+    assert d["clients"][0] == {"client": "192.168.4.210", "requests": 3, "output_tokens": 30}
+    only = await store.stats("7d", "fast", "Not/AZone")                  # bad tz -> UTC
+    assert only["tz"] == "UTC" and only["unit"] == "6h" and only["models"] == ["fast"]
+    assert only["kpis"]["requests"] == 1

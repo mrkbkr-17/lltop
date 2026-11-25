@@ -7,6 +7,7 @@
                                &before= (the `next` of the previous page) &limit=
     /lltop/api/history/{id}    one request in full
     /lltop/api/history-facets  models, endpoints, statuses with counts (for the filters)
+    /lltop/api/stats           aggregates for the Charts tab: ?range=24h|7d|30d|90d &model= &tz=
     anything else     forwarded to Ollama unchanged (proxy.forward)
 """
 
@@ -139,6 +140,12 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
         if not store:
             return no_store()
         return await from_store(store.facets)
+
+    @app.get("/lltop/api/stats", include_in_schema=False)
+    async def history_stats(range: str = "24h", model: str | None = None, tz: str | None = None):
+        if not store:
+            return no_store()
+        return await from_store(lambda: store.stats(range, model, tz))
 
     @app.get("/lltop/api/history/{request_id}", include_in_schema=False)
     async def history_get(request_id: str):

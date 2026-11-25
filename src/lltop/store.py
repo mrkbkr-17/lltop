@@ -168,6 +168,24 @@ def _like(text: str) -> str:
     return "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
+# ---------------------------------------------------------------- charts
+
+# range -> (bucket unit, first bucket as SQL, generate_series step)
+RANGES = {
+    "24h": ("hour", "date_trunc('hour', now() - interval '23 hours', %(tz)s)", "1 hour"),
+    "7d": ("6h", "date_trunc('day', now() - interval '6 days', %(tz)s)", "6 hours"),
+    "30d": ("day", "date_trunc('day', now() - interval '29 days', %(tz)s)", "1 day"),
+    "90d": ("day", "date_trunc('day', now() - interval '89 days', %(tz)s)", "1 day"),
+}
+
+FAILED = "('error', 'cancelled', 'interrupted')"
+
+
+def _tz(name: str | None) -> str:
+    from zoneinfo import available_timezones
+    return name if name and name in available_timezones() else "UTC"
+
+
 # ---------------------------------------------------------------- the store
 
 class PgStore:
@@ -342,3 +360,64 @@ class PgStore:
             if r["value"] is not None:
                 out[r["kind"]].append({"value": r["value"], "count": r["n"]})
         return out
+
+    async def stats(self, range_: str = "24h", model: str | None = None, tz: str | None = None) -> dict:
+        """Everything the Charts tab draws, for one time range (and optionally one model).
+
+        Buckets are in the viewer's time zone (days start at their midnight). Medians count
+        finished requests only. Time to first token includes waiting in Ollama's queue and
+        model loads, which is the point: it is what callers wait."""
+        unit, start_sql, step = RANGES.get(range_, RANGES["24h"])
+        p = {"tz": _tz(tz), "model": model or None, "step": step}
+        start = (await self._read(f"SELECT {start_sql} AS start", p))[0]["start"]
+        p["start"] = start
+        bucket_sql = {"hour": "date_trunc('hour', started_at, %(tz)s)",
+                      "day": "date_trunc('day', started_at, %(tz)s)",
+                      "6h": "date_bin('6 hours', started_at, %(start)s)"}[unit]
+        scope = "started_at >= %(start)s AND (%(model)s::text IS NULL OR model = %(model)s)"
+        buckets = [r["b"] for r in await self._read(
+            "SELECT generate_series(%(start)s::timestamptz, now(), %(step)s::interval, %(tz)s) AS b", p)]
+        per = await self._read(f"""
+            SELECT {bucket_sql} AS b, model,
+                   count(*) AS requests,
+                   count(*) FILTER (WHERE status IN {FAILED}) AS failed,
+                   coalesce(sum(output_tokens), 0) AS output_tokens,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY output_tokens_per_s)
+                       FILTER (WHERE status = 'finished') AS tps,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY ttft_s)
+                       FILTER (WHERE status = 'finished') AS ttft
+            FROM requests WHERE {scope} GROUP BY 1, 2""", p)
+        kpi = (await self._read(f"""
+            SELECT count(*) AS requests,
+                   coalesce(sum(output_tokens), 0) AS output_tokens,
+                   coalesce(sum(prompt_tokens), 0) AS prompt_tokens,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY output_tokens_per_s)
+                       FILTER (WHERE status = 'finished') AS tps,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY ttft_s)
+                       FILTER (WHERE status = 'finished') AS ttft,
+                   percentile_cont(0.9) WITHIN GROUP (ORDER BY ttft_s)
+                       FILTER (WHERE status = 'finished') AS ttft_p90,
+                   count(*) FILTER (WHERE status IN {FAILED}) AS failed,
+                   count(*) FILTER (WHERE cold_load) AS cold_loads
+            FROM requests WHERE {scope}""", p))[0]
+        clients = await self._read(f"""
+            SELECT regexp_replace(coalesce(client, '?'), ':[0-9]+$', '') AS client,
+                   count(*) AS requests, coalesce(sum(output_tokens), 0) AS output_tokens
+            FROM requests WHERE {scope} GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10""", p)
+        # Colors follow the model: order every model by when it was first seen, so a new model
+        # or a filter never repaints the others.
+        order = [r["model"] for r in await self._read(
+            "SELECT model FROM requests WHERE model IS NOT NULL GROUP BY model ORDER BY min(started_at), model")]
+        index = {b: i for i, b in enumerate(buckets)}
+        models = sorted({r["model"] for r in per if r["model"]}, key=lambda m: order.index(m) if m in order else 999)
+        series = {m: {k: [None if k in ("tps", "ttft") else 0] * len(buckets)
+                      for k in ("requests", "failed", "output_tokens", "tps", "ttft")} for m in models}
+        for r in per:
+            i = index.get(r["b"])
+            if i is None or r["model"] not in series:
+                continue
+            for k in ("requests", "failed", "output_tokens", "tps", "ttft"):
+                series[r["model"]][k][i] = r[k]
+        return {"range": range_ if range_ in RANGES else "24h", "unit": unit, "tz": p["tz"],
+                "buckets": [b.isoformat() for b in buckets], "model_order": order,
+                "models": models, "series": series, "kpis": kpi, "clients": clients}

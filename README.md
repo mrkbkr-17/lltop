@@ -13,9 +13,9 @@ straight back. A copy of each chunk goes to the dashboard.
 Useful when Ollama is slow (CPU-only machines, big models) and you want to know what it is
 doing right now, which app is using it, and how fast it really is.
 
-> Status: milestone 2 in progress. The last 50 requests survive restarts (a JSON file);
-> with PostgreSQL configured, every request is kept and searchable in the History tab.
-> Charts over time come next.
+> Status: milestone 2. The last 50 requests survive restarts (a JSON file); with
+> PostgreSQL configured, every request is kept, searchable in the History tab and charted
+> in the Charts tab.
 
 ## What it shows
 
@@ -28,6 +28,11 @@ doing right now, which app is using it, and how fast it really is.
   with a live tokens/s estimate.
 - **History tab** (with PostgreSQL): every request ever made, newest first, filtered by
   model, status, endpoint and client, with full-text search in prompts and responses.
+- **Charts tab** (with PostgreSQL), for the last 24 hours or 7, 30 or 90 days, all models
+  or one: requests, tokens, median speed, median wait for the first token, failures and
+  cold loads as headline numbers; requests over time stacked by model; output speed and
+  wait for the first token over time, one line per model (the wait includes time spent
+  in Ollama's queue); and which clients use the models. Each chart has a table view.
 - **The last 50 finished requests** (saved to a file, so a restart keeps them): prompt and output tokens, time to first token,
   prompt and output tokens/s, total time, cold or warm model load, status (finished,
   error, cancelled). Click a row for the full prompt, response and Ollama's raw stats.
@@ -173,6 +178,7 @@ trust: there is no login.
 | `/lltop/api/history` | PostgreSQL history: `?model=&status=&endpoint=&client=&q=&before=&limit=` |
 | `/lltop/api/history/{id}` | One request in full |
 | `/lltop/api/history-facets` | Models, endpoints and statuses with counts |
+| `/lltop/api/stats` | Aggregates for the Charts tab: `?range=24h\|7d\|30d\|90d&model=&tz=` |
 
 ## Development
 
@@ -194,7 +200,9 @@ Ollama.
 
 ## Roadmap
 
-- Charts over time (speed per model, load, who uses what), retention settings.
+- Retention settings (delete history older than N days).
+- Which app is behind a gateway's requests (e.g. LiteLLM's `user` or key alias), so
+  "who uses the models" shows apps instead of one gateway address.
 - A React dashboard.
 - Running as the default endpoint in front of Ollama for other gateways.
 
