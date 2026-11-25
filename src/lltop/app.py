@@ -128,8 +128,11 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
                            limit: int = Query(50, ge=1, le=200)):
         if not store:
             return no_store()
-        return await from_store(lambda: store.search(model=model, status=status, endpoint=endpoint,
-                                                     client=client, q=q, before=before, limit=limit))
+        async def read():
+            page = await store.search(model=model, status=status, endpoint=endpoint,
+                                      client=client, q=q, before=before, limit=limit)
+            return {**page, "status": store.status()}
+        return await from_store(read)
 
     @app.get("/lltop/api/history-facets", include_in_schema=False)
     async def history_facets():

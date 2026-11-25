@@ -66,16 +66,31 @@
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } .models { grid-template-columns: 1fr; } }
   .kv { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+  nav.tabs { display: flex; gap: 4px; margin-left: 8px; }
+  nav.tabs a { padding: 4px 12px; border-radius: 6px; color: var(--muted); text-decoration: none; font-weight: 600; }
+  nav.tabs a.on { background: var(--code); color: var(--text); }
+  .spacer { flex: 1; }
+  .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .filters select, .filters input, button { font: inherit; color: var(--text); background: var(--card);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; }
+  .filters input[type=search] { min-width: 280px; flex: 1; max-width: 520px; }
+  button { cursor: pointer; } button:hover { border-color: var(--accent); }
+  td.preview { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; color: var(--muted); }
+  .bar-row { display: flex; gap: 12px; align-items: center; margin-top: 10px; }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
 <header>
   <h1>lltop</h1>
+  <nav class="tabs"><a href="#live" id="tab-live" class="on">Live</a><a href="#history" id="tab-history">History</a></nav>
   <span><span id="conn-dot" class="dot"></span><span id="conn">connecting…</span></span>
   <span class="muted" id="upstream"></span>
   <span class="muted" id="ps"></span>
+  <span class="spacer"></span>
+  <span class="muted" id="hist-status"></span>
 </header>
-<main>
+<main id="view-live">
   <section>
     <h2>Models</h2>
     <div class="models" id="models"></div>
@@ -92,6 +107,27 @@
       <tbody id="recent"></tbody>
     </table>
     <div class="empty" id="no-recent">Nothing finished yet. Requests sent to this port show up here.</div>
+  </section>
+</main>
+<main id="view-history" class="hidden">
+  <section>
+    <div class="filters">
+      <select id="f-model"><option value="">all models</option></select>
+      <select id="f-status"><option value="">any status</option></select>
+      <select id="f-endpoint"><option value="">all endpoints</option></select>
+      <input id="f-client" placeholder="client (e.g. 172.22)" size="14">
+      <input id="f-q" type="search" placeholder="search prompts and responses…">
+      <button id="f-new" class="hidden"></button>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Time</th><th>Model</th><th>Endpoint</th><th>Client</th><th>Status</th><th>Prompt</th>
+        <th class="num">Prompt tok</th><th class="num">Output tok</th><th class="num">TTFT</th>
+        <th class="num">Prompt tok/s</th><th class="num">Output tok/s</th><th class="num">Total</th><th>Load</th>
+      </tr></thead>
+      <tbody id="history"></tbody>
+    </table>
+    <div class="bar-row"><button id="h-more" class="hidden">Load older</button><span class="muted" id="h-info"></span></div>
   </section>
 </main>
 <script>
@@ -292,24 +328,31 @@ function tick() {
 }
 setInterval(tick, 1000);
 
-// ------------------------------------------------------------ recent table
-function recentRow(r) {
+// ------------------------------------------------- table rows (live and history)
+function fmtWhen(ts) {
+  const d = new Date(ts * 1000), today = new Date().toDateString() === d.toDateString();
+  return today ? d.toLocaleTimeString() : d.toLocaleDateString() + " " + d.toLocaleTimeString();
+}
+function rowCells(r, withPreview) {
   const s = r.stats || {};
-  const tr = el("tr", "row");
   const cells = [
-    [fmtTime(r.ts)], [r.model || "?"], [r.endpoint], [r.client || ""],
+    [withPreview ? fmtWhen(r.ts) : fmtTime(r.ts)], [r.model || "?"], [r.endpoint], [r.client || ""],
     [r.status, "status-" + r.status],
+  ];
+  if (withPreview) cells.push([r.preview || "", "preview"]);
+  cells.push(
     [fmtNum(s.prompt_tokens), "num"], [fmtNum(s.output_tokens), "num"], [fmtSec(s.ttft_s), "num"],
     [fmtRate(s.prompt_tokens_per_s), "num"],
     [fmtRate(s.output_tokens_per_s) + (s.rate_source === "chunks" ? "*" : ""), "num"],
     [fmtSec(s.wall_s), "num"],
-    [s.cold_load === true ? "cold " + fmtSec(s.load_s) : (s.cold_load === false ? "warm" : "?"), s.cold_load ? "cold" : ""],
-  ];
+    [s.cold_load === true ? "cold " + fmtSec(s.load_s) : (s.cold_load === false ? "warm" : "?"), s.cold_load ? "cold" : ""]);
+  const tr = el("tr", "row");
   for (const [text, cls] of cells) tr.append(el("td", cls || "", text));
   if (s.rate_source === "chunks") tr.title = "* estimated from chunk timing (no Ollama durations on /v1)";
-  const detail = el("tr", "detail");
-  const td = el("td");
-  td.colSpan = cells.length;
+  if (withPreview && r.preview) tr.children[5].title = r.preview;
+  return tr;
+}
+function detailGrid(r) {
   const g = el("div", "grid2"), left = el("div"), right = el("div");
   left.append(el("div", "label", r.prompt != null ? "prompt" : "last user message"),
               el("div", "text prompt", promptSummary(r)), requestDetails(r));
@@ -319,7 +362,14 @@ function recentRow(r) {
   if (r.error) right.append(el("div", "label", "error"), el("div", "text status-error", r.error));
   right.append(el("div", "label", "Ollama stats"), el("div", "kv", JSON.stringify(r.raw_stats || {})));
   g.append(left, right);
-  td.append(g);
+  return g;
+}
+function recentRow(r) {
+  const tr = rowCells(r, false);
+  const detail = el("tr", "detail");
+  const td = el("td");
+  td.colSpan = tr.children.length;
+  td.append(detailGrid(r));
   detail.append(td);
   detail.style.display = openDetails.has(r.id) ? "" : "none";
   tr.addEventListener("click", () => {
@@ -353,6 +403,7 @@ const handlers = {
     for (const r of ev.active || []) startRequest(r);
     recent = ev.recent || [];
     if (ev.upstream) $("upstream").textContent = "→ " + ev.upstream;
+    renderHistStatus(ev.history);
     renderPs(); renderModels(); renderRecent();
   },
   models(ev) { models = ev.models || []; psOk = ev.ok; psError = ev.error; renderPs(); renderModels(); },
@@ -376,10 +427,141 @@ const handlers = {
     delete done.el; delete done.type;
     recent.unshift(done);
     recent = recent.slice(0, RECENT_MAX);
+    noteNewForHistory();
     renderModels(); renderRecent();
   },
 };
 handlers.finished = handlers.error = handlers.cancelled = handlers.interrupted = handlers.end;
+
+// ------------------------------------------------------- history (Postgres)
+const hist = { enabled: null, next: null, loading: false, loaded: false, fresh: 0, open: new Set(), seq: 0 };
+function renderHistStatus(st) {
+  const t = $("hist-status");
+  if (!st || !st.enabled) { t.textContent = ""; return; }
+  if (st.ok === false) {
+    t.textContent = "history: Postgres down, " + st.queued + " waiting" + (st.dropped ? ", " + st.dropped + " lost" : "");
+    t.style.color = "var(--bad)";
+  } else {
+    t.textContent = "history: Postgres" + (st.queued ? " (" + st.queued + " saving…)" : "");
+    t.style.color = "";
+  }
+}
+function histParams(more) {
+  const p = new URLSearchParams();
+  for (const [k, id] of [["model", "f-model"], ["status", "f-status"], ["endpoint", "f-endpoint"],
+                         ["client", "f-client"], ["q", "f-q"]]) {
+    const v = $(id).value.trim();
+    if (v) p.set(k, v);
+  }
+  if (more && hist.next) p.set("before", hist.next);
+  p.set("limit", "50");
+  return p;
+}
+async function getJSON(url) {
+  const r = await fetch(url);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(body.error || ("HTTP " + r.status)), { status: r.status, body });
+  return body;
+}
+function fillSelect(id, items, label) {
+  const sel = $(id), keep = sel.value;
+  sel.replaceChildren(el("option", null, label));
+  sel.firstChild.value = "";
+  for (const it of items) {
+    const o = el("option", null, it.value + " (" + it.count.toLocaleString() + ")");
+    o.value = it.value;
+    sel.append(o);
+  }
+  sel.value = keep;
+}
+async function loadFacets() {
+  try {
+    const f = await getJSON("/lltop/api/history-facets");
+    fillSelect("f-model", f.model, "all models");
+    fillSelect("f-status", f.status, "any status");
+    fillSelect("f-endpoint", f.endpoint, "all endpoints");
+  } catch (e) { /* loadHistory shows the error */ }
+}
+async function loadHistory(more) {
+  const seq = ++hist.seq;                      // ignore answers to older searches
+  hist.loading = true;
+  $("h-info").textContent = "loading…";
+  try {
+    const page = await getJSON("/lltop/api/history?" + histParams(more));
+    if (seq !== hist.seq) return;
+    hist.enabled = true;
+    if (page.status) renderHistStatus(page.status);
+    const body = $("history");
+    if (!more) { body.replaceChildren(); hist.fresh = 0; renderFresh(); }
+    for (const r of page.rows) body.append(...historyRow(r));
+    hist.next = page.next;
+    hist.loaded = true;
+    $("h-more").classList.toggle("hidden", !page.next);
+    const n = body.querySelectorAll("tr.row").length;
+    $("h-info").textContent = n ? n.toLocaleString() + " shown" + (page.next ? "" : ", that's all") : "No requests match.";
+  } catch (e) {
+    if (seq !== hist.seq) return;
+    $("history").replaceChildren();
+    $("h-more").classList.add("hidden");
+    hist.enabled = e.status !== 404;
+    $("h-info").textContent = e.status === 404
+      ? "Postgres history is not set up: start lltop with LLTOP_PG_DSN (see the README). The Live tab still shows the last 50."
+      : "Could not load the history: " + e.message;
+  } finally {
+    if (seq === hist.seq) hist.loading = false;
+  }
+}
+function historyRow(r) {
+  const tr = rowCells(r, true);
+  const detail = el("tr", "detail");
+  const td = el("td");
+  td.colSpan = tr.children.length;
+  detail.append(td);
+  const show = async () => {
+    detail.style.display = "";
+    if (td.firstChild) return;
+    td.append(el("div", "muted", "loading…"));
+    try { td.replaceChildren(detailGrid(await getJSON("/lltop/api/history/" + encodeURIComponent(r.id)))); }
+    catch (e) { td.replaceChildren(el("div", "status-error", "Could not load: " + e.message)); }
+  };
+  detail.style.display = "none";
+  if (hist.open.has(r.id)) show();
+  tr.addEventListener("click", () => {
+    if (detail.style.display === "none") { hist.open.add(r.id); show(); }
+    else { hist.open.delete(r.id); detail.style.display = "none"; }
+  });
+  return [tr, detail];
+}
+function renderFresh() {
+  const b = $("f-new");
+  b.classList.toggle("hidden", !hist.fresh);
+  b.textContent = "↻ " + hist.fresh + " new";
+}
+function noteNewForHistory() {
+  if (!hist.loaded || !hist.enabled) return;
+  hist.fresh++;
+  renderFresh();
+}
+let searchTimer = null;
+for (const id of ["f-model", "f-status", "f-endpoint"]) $(id).addEventListener("change", () => loadHistory(false));
+for (const id of ["f-q", "f-client"]) $(id).addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => loadHistory(false), 400);
+});
+$("h-more").addEventListener("click", () => loadHistory(true));
+$("f-new").addEventListener("click", () => { loadFacets(); loadHistory(false); });
+
+// ------------------------------------------------------------------ tabs
+function showView() {
+  const history = location.hash === "#history";
+  $("view-live").classList.toggle("hidden", history);
+  $("view-history").classList.toggle("hidden", !history);
+  $("tab-live").classList.toggle("on", !history);
+  $("tab-history").classList.toggle("on", history);
+  if (history && !hist.loaded && !hist.loading) { loadFacets(); loadHistory(false); }
+}
+window.addEventListener("hashchange", showView);
+showView();
 
 // -------------------------------------------------------------- websocket
 let retry = 1000;

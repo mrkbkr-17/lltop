@@ -13,8 +13,9 @@ straight back. A copy of each chunk goes to the dashboard.
 Useful when Ollama is slow (CPU-only machines, big models) and you want to know what it is
 doing right now, which app is using it, and how fast it really is.
 
-> Status: milestone 1. The last 50 requests are kept, also across restarts (a JSON file);
-> a full history in a database comes later.
+> Status: milestone 2 in progress. The last 50 requests survive restarts (a JSON file);
+> with PostgreSQL configured, every request is kept and searchable in the History tab.
+> Charts over time come next.
 
 ## What it shows
 
@@ -25,6 +26,8 @@ doing right now, which app is using it, and how fast it really is.
   time, phase (reading prompt / thinking / generating), the prompt (plus the whole
   conversation, tools and options), and the thinking and response text as it streams,
   with a live tokens/s estimate.
+- **History tab** (with PostgreSQL): every request ever made, newest first, filtered by
+  model, status, endpoint and client, with full-text search in prompts and responses.
 - **The last 50 finished requests** (saved to a file, so a restart keeps them): prompt and output tokens, time to first token,
   prompt and output tokens/s, total time, cold or warm model load, status (finished,
   error, cancelled). Click a row for the full prompt, response and Ollama's raw stats.
@@ -59,6 +62,7 @@ and open the dashboard at <http://127.0.0.1:11435/lltop/>.
 | `--upstream` | `LLTOP_UPSTREAM` | `http://127.0.0.1:11434` | Where Ollama is. |
 | `--poll` | `LLTOP_POLL` | `3` | Seconds between `/api/ps` polls. |
 | `--history` | `LLTOP_HISTORY` | `~/.local/state/lltop/history.json` | Where the last 50 requests are saved. `--no-history` keeps them in memory only. |
+| `--pg-dsn` | `LLTOP_PG_DSN` | off | PostgreSQL for the full history, e.g. `postgresql://lltop@localhost:5432/lltop`. Password in `~/.pgpass`, not here. |
 | `--log-level` | `LLTOP_LOG_LEVEL` | `info` | |
 
 ### Docker
@@ -72,6 +76,24 @@ docker run --rm -p 127.0.0.1:11435:11435 -v lltop-data:/data \
 The image listens on all interfaces inside the container and expects Ollama at
 `http://host.docker.internal:11434` (set `LLTOP_UPSTREAM` otherwise, e.g.
 `http://ollama:11434` when both run on the same Docker network).
+
+### History in PostgreSQL (optional)
+
+Every finished request becomes a row in table `requests` (created automatically): the
+prompt or messages, tools, options, thinking, response, client, and the stats as columns.
+It holds every prompt, so give lltop its own database and role that nobody else can
+connect to:
+
+```sql
+CREATE ROLE lltop LOGIN PASSWORD '…';
+CREATE DATABASE lltop OWNER lltop;
+REVOKE CONNECT ON DATABASE lltop FROM PUBLIC;
+```
+
+Then put the password in `~/.pgpass` (`host:5432:lltop:lltop:password`, mode 0600) and
+start lltop with `LLTOP_PG_DSN=postgresql://lltop@host:5432/lltop`. If PostgreSQL is
+unreachable, lltop keeps working: rows wait in a queue (10,000) and are written when it is
+back. On the first start it also copies the requests from the history file.
 
 ### Run as a service (systemd)
 
@@ -122,6 +144,8 @@ trust: there is no login.
   `load_duration` is a second or more (or, when Ollama gives no stats, when `/api/ps`
   didn't list the model as the request started). `/v1/chat/completions` reports no
   durations, so its output speed is estimated from chunk timing (marked `*`).
+- **Store** (`store.py`, optional): writes each finished request to PostgreSQL from a
+  background queue and answers the History tab's queries.
 - **Hub** (`hub.py`): the in-memory state (loaded models, requests in progress, last 50)
   and the fan-out to browsers. `history.py` saves the last 50 to a JSON file (at most
   every 2 s, and on shutdown, when requests still running are kept as `interrupted`). Each browser gets its own bounded queue; one that falls
@@ -146,11 +170,21 @@ trust: there is no login.
 | `/lltop/` | The dashboard |
 | `/lltop/ws` | WebSocket: a `snapshot` on connect, then every event |
 | `/lltop/api/state` | The snapshot as JSON |
+| `/lltop/api/history` | PostgreSQL history: `?model=&status=&endpoint=&client=&q=&before=&limit=` |
+| `/lltop/api/history/{id}` | One request in full |
+| `/lltop/api/history-facets` | Models, endpoints and statuses with counts |
 
 ## Development
 
 ```sh
 uv run pytest
+```
+
+The PostgreSQL tests need a throwaway database (they drop and recreate its `requests`
+table) and are skipped otherwise:
+
+```sh
+LLTOP_TEST_PG_DSN=postgresql://lltop@localhost:5432/lltop_test uv run pytest
 ```
 
 The tests use a fake Ollama: stream reassembly and parsing, the stats math, byte-for-byte
@@ -160,7 +194,7 @@ Ollama.
 
 ## Roadmap
 
-- Persistent history (PostgreSQL) and charts over time.
+- Charts over time (speed per model, load, who uses what), retention settings.
 - A React dashboard.
 - Running as the default endpoint in front of Ollama for other gateways.
 
