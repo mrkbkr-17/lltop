@@ -3,6 +3,7 @@
 *Like `htop`, but for LLMs.*
 
 [![tests](https://github.com/mrkbkr-17/lltop/actions/workflows/tests.yml/badge.svg)](https://github.com/mrkbkr-17/lltop/actions/workflows/tests.yml)
+[![release](https://img.shields.io/github/v/release/mrkbkr-17/lltop)](https://github.com/mrkbkr-17/lltop/releases/latest)
 [![license: MIT](https://img.shields.io/github/license/mrkbkr-17/lltop)](LICENSE)
 ![python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
 
