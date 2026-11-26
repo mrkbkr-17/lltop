@@ -2,6 +2,10 @@
 
 With PostgreSQL configured, a row per minute is kept (MinuteLog) for the Machine tab.
 
+Other machines: each runs `lltop --meters-only` (or a whole lltop), which answers
+/lltop/api/meters with its last reading; the main lltop is started with --machines and
+fetches those (Remote, collect_forever), so one dashboard shows them all.
+
 Read straight from Linux's /proc and /sys (no extra package), GPUs from `nvidia-smi`
 when it is installed. Every few seconds a 'machine' event goes to the hub. Anything
 that can't be read is left out (None); on a system without /proc (macOS, Windows) the
@@ -13,16 +17,21 @@ the usual setup; with a remote --upstream, start lltop with --no-machine.
 
 import asyncio
 import logging
+import math
 import os
 import shutil
 import socket
 from pathlib import Path
+from urllib.parse import urlsplit
 
 log = logging.getLogger("lltop")
 
 CPU_CHIPS = ("coretemp", "k10temp", "zenpower", "cpu_thermal", "soc_thermal")
 GPU_QUERY = "name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw"
 MIB = 1024 * 1024
+METERS_PATH = "/lltop/api/meters"
+STALE_S = 30                # a reading older than this is not passed on
+MAX_GPUS = 16
 
 
 def cpu_times(root: Path) -> tuple[int, int]:
@@ -164,10 +173,11 @@ def _pct(used, total) -> float | None:
 
 
 class MinuteLog:
-    """Turns the readings into one row per minute for the history (store.py table
-    machine_minutes): averages, and the peak for CPU, GPU use and temperatures."""
+    """Turns one machine's readings into one row per minute for the history (store.py
+    table machine_minutes): averages, and the peak for CPU, GPU use and temperatures."""
 
-    def __init__(self):
+    def __init__(self, machine: str = ""):
+        self.machine = machine
         self.minute: int | None = None
         self.readings: list[dict] = []
 
@@ -195,7 +205,7 @@ class MinuteLog:
                          "temp": _max(x.get("temp_c") for x in g),
                          "watts": _avg(x.get("watts") for x in g)})
         mem_used = _avg(e.get("mem_used") for e in r)
-        return {"minute": minute, "samples": len(r),
+        return {"machine": self.machine, "minute": minute, "samples": len(r),
                 "cpu": _avg(e.get("cpu_pct") for e in r), "cpu_max": _max(e.get("cpu_pct") for e in r),
                 "mem": _avg(_pct(e.get("mem_used"), e.get("mem_total")) for e in r),
                 "mem_used": None if mem_used is None else int(mem_used),
@@ -205,8 +215,9 @@ class MinuteLog:
 
 
 async def poll_forever(machine, hub, interval: float, minutes: MinuteLog | None = None,
-                       sink=None) -> None:
-    """minutes + sink: each finished minute of readings is handed to sink (the history)."""
+                       sink=None, name: str | None = None) -> None:
+    """minutes + sink: each finished minute of readings is handed to sink (the history).
+    name: the name the readings go by (default: the one the reader gives)."""
     try:
         await machine.read()                       # the first reading only sets the CPU baseline
     except Exception as e:
@@ -216,6 +227,8 @@ async def poll_forever(machine, hub, interval: float, minutes: MinuteLog | None 
         await asyncio.sleep(interval)
         try:
             ev = await machine.read()
+            if name is not None:
+                ev["name"] = name
             hub.publish(ev)                        # sets ev["ts"]
             if minutes is not None and sink is not None:
                 row = minutes.add(ev)
@@ -223,3 +236,104 @@ async def poll_forever(machine, hub, interval: float, minutes: MinuteLog | None 
                     sink(row)
         except Exception:
             log.debug("machine: reading failed", exc_info=True)
+
+
+# ------------------------------------------------------------- other machines
+
+def parse_machines(text: str | None, local: str = "") -> list[tuple[str, str]]:
+    """'gpu-box=http://192.168.1.20:11435, http://192.168.1.21:11435' -> [(name, url)].
+    Without a name the address's host is the name. Raises ValueError with a readable reason."""
+    found: list[tuple[str, str]] = []
+    for part in (text or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, sep, url = part.partition("=")
+        if not sep or "://" in name:
+            name, url = "", part
+        url = url.strip().rstrip("/")
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError(f"--machines: {part!r} is not an http(s) address")
+        name = name.strip() or parts.hostname
+        if len(name) > 40 or not all(c.isalnum() or c in "-_. " for c in name):
+            raise ValueError(f"--machines: the name {name!r} must be at most 40 letters, digits, - _ . or spaces")
+        if name == local or any(name == n for n, _ in found):
+            raise ValueError(f"--machines: the name {name!r} is used twice (this machine is {local!r})")
+        found.append((name, url))
+    return found
+
+
+def _num(v, lo: float = 0.0, hi: float = 1e15) -> float | None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        return None
+    return float(v) if lo <= v <= hi else None
+
+
+def _whole(v) -> int | None:
+    n = _num(v)
+    return None if n is None else int(n)
+
+
+def _text(v, limit: int = 80) -> str:
+    return "".join(c for c in v if c.isprintable())[:limit] if isinstance(v, str) else ""
+
+
+def clean_reading(data, name: str) -> dict:
+    """A reading fetched from another machine comes from outside: keep only the fields we
+    know, as numbers in range and short plain names. Raises ValueError if it is no reading
+    or is old (the other machine's poller stopped)."""
+    if not isinstance(data, dict) or data.get("type") != "machine":
+        raise ValueError("not a machine reading")
+    age = _num(data.get("age_s"), lo=-1e9)
+    if age is not None and age > STALE_S:
+        raise ValueError(f"its last reading is {int(age)} s old")
+    gpus = data.get("gpus") if isinstance(data.get("gpus"), list) else []
+    return {"type": "machine", "name": name, "remote": True, "host": _text(data.get("name")),
+            "cores": _whole(data.get("cores")), "cpu_pct": _num(data.get("cpu_pct"), hi=100),
+            "load1": _num(data.get("load1"), hi=1e6),
+            "mem_used": _whole(data.get("mem_used")), "mem_total": _whole(data.get("mem_total")),
+            "disk_used": _whole(data.get("disk_used")), "disk_total": _whole(data.get("disk_total")),
+            "temp_c": _num(data.get("temp_c"), hi=200),
+            "gpus": [{"name": _text(g.get("name")), "util_pct": _num(g.get("util_pct"), hi=100),
+                      "mem_used": _whole(g.get("mem_used")), "mem_total": _whole(g.get("mem_total")),
+                      "temp_c": _num(g.get("temp_c"), hi=200), "watts": _num(g.get("watts"), hi=1e5)}
+                     for g in gpus[:MAX_GPUS] if isinstance(g, dict)]}
+
+
+class Remote:
+    """Another machine's meters, fetched from its lltop (GET only, a short timeout)."""
+
+    def __init__(self, name: str, url: str, client):
+        self.name, self.url, self.client = name, url, client
+
+    async def read(self) -> dict:
+        r = await self.client.get(self.url + METERS_PATH)
+        r.raise_for_status()
+        return clean_reading(r.json(), self.name)
+
+
+async def collect_forever(remote: Remote, hub, interval: float, minutes: MinuteLog | None = None,
+                          sink=None) -> None:
+    """Keep fetching another machine's readings. While it doesn't answer, the hub is told
+    once (the card shows it) and the fetching carries on."""
+    up = None
+    while True:
+        try:
+            ev = await remote.read()
+            hub.publish(ev)                        # sets ev["ts"]: our clock, not the other machine's
+            if up is not True:
+                log.info("machine %s: readings arriving from %s", remote.name, remote.url)
+            up = True
+            if minutes is not None and sink is not None:
+                row = minutes.add(ev)
+                if row:
+                    sink(row)
+        except Exception as e:
+            if up is not False:
+                log.warning("machine %s: no reading from %s (%s: %s)", remote.name, remote.url,
+                            type(e).__name__, e)
+                hub.publish({"type": "machine", "name": remote.name, "remote": True, "offline": True,
+                             "error": type(e).__name__})
+            up = False
+        await asyncio.sleep(interval)

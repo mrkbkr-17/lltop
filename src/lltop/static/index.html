@@ -92,6 +92,10 @@
   .track.warn { --fill: var(--warn); } .track.bad { --fill: var(--bad); }
   .meter-note { font-size: 12px; color: var(--muted); margin-top: 4px; min-height: 18px; }
   .meter-note .flag { font-weight: 600; color: var(--text); }
+  .machines { display: grid; gap: 16px; }
+  .machines:empty { display: none; }
+  .machines .card.away .meters { opacity: .45; }
+  .pill.away { background: var(--soft); color: var(--warn); font-weight: 600; font-size: 12px; padding: 1px 9px; border-radius: 999px; }
   svg.spark { display: block; width: 100%; height: 30px; margin-top: 4px; overflow: visible; }
   svg.spark polyline { fill: none; stroke: var(--cpu); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
   svg.spark line { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -206,11 +210,7 @@
 <main id="view-live">
   <header class="page-head"><h1>Live</h1><p id="live-lead">Waiting for the first reading…</p></header>
   <section class="kpis" id="live-kpis" aria-label="Headline numbers"></section>
-  <section class="card hidden" id="machine" aria-label="Machine">
-    <div class="card-head"><span class="name" id="m-name"></span><span class="muted" id="m-facts"></span>
-      <span class="spacer"></span><span class="muted" id="m-span"></span><a href="#machine">History →</a></div>
-    <div class="meters" id="m-meters"></div>
-  </section>
+  <div id="machines" class="machines"></div>
   <section>
     <h2>Models</h2>
     <div class="models" id="models"></div>
@@ -242,8 +242,9 @@
   <div class="charts" id="c-charts"></div>
 </main>
 <main id="view-machine" class="hidden">
-  <header class="page-head"><h1>Machine</h1><p>CPU, memory, GPU and temperature over time, with the requests that ran then.</p></header>
+  <header class="page-head"><h1>Machine</h1><p>CPU, memory, GPU and temperature over time, with the requests that went through lltop then.</p></header>
   <div class="filters">
+    <span class="seg hidden" id="mh-machines" role="group" aria-label="Machine"></span>
     <span class="seg" id="mh-range">
       <button data-r="1h">1 hour</button><button data-r="24h" class="on">24 hours</button><button data-r="7d">7 days</button><button data-r="30d">30 days</button>
     </span>
@@ -298,8 +299,7 @@ let models = [];          // from /api/ps
 let psOk = null, psError = null;
 const active = new Map(); // id -> request record (+ .el, its DOM element)
 let recent = [];          // finished records, newest first
-let machine = null;       // the last machine reading (null: meters off or not supported)
-let trend = [];           // percentages of the last readings, oldest first
+const machines = new Map(); // name -> { r: last reading, trend: [percentages, oldest first], card, meters }
 const TREND_MAX = 200;
 const cards = new Map();  // model key -> card element
 const openDetails = new Set();
@@ -475,8 +475,7 @@ function renderTiles() {
 // A meter per ratio (label, figure, bar; the track is a lighter step of the fill) and
 // a sparkline of the last readings underneath. Only memory and disk change colour when
 // nearly full, always with a word beside the figure: a busy CPU or GPU is not a problem.
-const meters = new Map();
-function meter(id) {
+function meter(meters, id) {
   let m = meters.get(id);
   if (!m) {
     m = el("div", "meter");
@@ -494,8 +493,8 @@ function meter(id) {
   }
   return m;
 }
-function setMeter(id, label, pct, value, note, series, limits) {
-  const m = meter(id);
+function setMeter(meters, id, label, pct, value, note, series, limits) {
+  const m = meter(meters, id);
   m.label.textContent = label; m.label.title = label;
   m.value.textContent = value;
   const p = pct == null ? 0 : Math.max(0, Math.min(100, pct));
@@ -517,37 +516,59 @@ function setMeter(id, label, pct, value, note, series, limits) {
 const ratio = (used, total) => used != null && total ? 100 * used / total : null;
 const fmtPct = (p) => p == null ? "–" : Math.round(p) + "%";
 const fmtOf = (used, total) => used == null || !total ? "–" : fmtBytes(used).replace(/ [KMGT]?B$/, "") + " of " + fmtBytes(total);
-function renderMachine() {
-  const box = $("machine");
-  box.classList.toggle("hidden", !machine);
-  if (!machine) return;
-  const m = machine, gpus = m.gpus || [];
-  $("m-name").textContent = m.name || "This machine";
+function trendPoint(ev) {
+  return { ts: ev.ts, cpu: ev.cpu_pct, mem: ratio(ev.mem_used, ev.mem_total),
+           gpus: (ev.gpus || []).map((g) => ({ util: g.util_pct, mem: ratio(g.mem_used, g.mem_total) })) };
+}
+function machineCard(name) {
+  const card = el("section", "card");
+  card.setAttribute("aria-label", "Machine " + name);
+  const head = el("div", "card-head");
+  card.title_ = el("span", "name"); card.away = el("span", "pill away hidden");
+  card.facts = el("span", "muted"); card.span = el("span", "muted");
+  const link = el("a", "", "History →");
+  link.href = "#machine";
+  link.addEventListener("click", () => { mh.machine = name; });
+  head.append(card.title_, card.away, card.facts, el("span", "spacer"), card.span, link);
+  card.grid = el("div", "meters");
+  card.append(head, card.grid);
+  return card;
+}
+// One card per machine: the one lltop runs on first, then the others (--machines).
+function renderMachine(name) {
+  const st = machines.get(name);
+  if (!st) return;
+  if (!st.card) { st.card = machineCard(name); st.meters = new Map(); $("machines").append(st.card); }
+  const m = st.r, gpus = m.gpus || [], trend = st.trend, card = st.card, away = !!(m.offline || m.waiting);
+  card.title_.textContent = name || "This machine";
+  card.classList.toggle("away", away);
+  card.away.classList.toggle("hidden", !away);
+  card.away.textContent = m.waiting ? "waiting for the first reading" : "not answering since " + fmtMoment(m.ts, false);
   const facts = [];
+  if (m.host && m.host !== name) facts.push(m.host);
   if (m.cores) facts.push(m.cores + " CPU threads");
-  if (m.load1 != null) facts.push("load " + m.load1.toFixed(2));
-  if (m.temp_c != null) facts.push("CPU " + Math.round(m.temp_c) + " °C");
-  $("m-facts").textContent = facts.join(" · ");
-  if (trend.length > 1) {
+  if (!away && m.load1 != null) facts.push("load " + m.load1.toFixed(2));
+  if (!away && m.temp_c != null) facts.push("CPU " + Math.round(m.temp_c) + " °C");
+  card.facts.textContent = facts.join(" · ");
+  if (trend.length > 1 && !away) {
     const span = trend[trend.length - 1].ts - trend[0].ts;
-    $("m-span").textContent = "trend lines: last " + (span < 90 ? Math.round(span) + " seconds" : Math.round(span / 60) + " minutes");
-  } else $("m-span").textContent = "";
-  const used = [];
-  used.push(setMeter("cpu", "CPU", m.cpu_pct, fmtPct(m.cpu_pct), "", trend.map((p) => p.cpu)));
-  const memPct = ratio(m.mem_used, m.mem_total);
-  used.push(setMeter("mem", "Memory", memPct, fmtOf(m.mem_used, m.mem_total), "", trend.map((p) => p.mem), [90, 97]));
+    card.span.textContent = "trend lines: last " + (span < 90 ? Math.round(span) + " seconds" : Math.round(span / 60) + " minutes");
+  } else card.span.textContent = "";
+  if (m.cpu_pct === undefined) return;          // no reading yet
+  const used = [], set = (...a) => used.push(setMeter(st.meters, ...a));
+  set("cpu", "CPU", m.cpu_pct, fmtPct(m.cpu_pct), "", trend.map((p) => p.cpu));
+  set("mem", "Memory", ratio(m.mem_used, m.mem_total), fmtOf(m.mem_used, m.mem_total), "", trend.map((p) => p.mem), [90, 97]);
   gpus.forEach((g, i) => {
     const tag = gpus.length > 1 ? "GPU " + i : "GPU";
     const notes = [g.name, g.temp_c != null ? Math.round(g.temp_c) + " °C" : null, g.watts != null ? Math.round(g.watts) + " W" : null];
-    used.push(setMeter("gpu" + i, tag, g.util_pct, fmtPct(g.util_pct), notes.filter(Boolean).join(" · "),
-                       trend.map((p) => ((p.gpus || [])[i] || {}).util)));
-    used.push(setMeter("vram" + i, tag + " memory", ratio(g.mem_used, g.mem_total), fmtOf(g.mem_used, g.mem_total), "",
-                       trend.map((p) => ((p.gpus || [])[i] || {}).mem)));
+    set("gpu" + i, tag, g.util_pct, fmtPct(g.util_pct), notes.filter(Boolean).join(" · "),
+        trend.map((p) => ((p.gpus || [])[i] || {}).util));
+    set("vram" + i, tag + " memory", ratio(g.mem_used, g.mem_total), fmtOf(g.mem_used, g.mem_total), "",
+        trend.map((p) => ((p.gpus || [])[i] || {}).mem));
   });
-  if (m.disk_total) used.push(setMeter("disk", "Disk", ratio(m.disk_used, m.disk_total), fmtOf(m.disk_used, m.disk_total),
-                                       "", null, [90, 97]));
-  for (const [id, e] of meters) if (!used.includes(e)) { e.remove(); meters.delete(id); }
-  $("m-meters").append(...used);
+  if (m.disk_total) set("disk", "Disk", ratio(m.disk_used, m.disk_total), fmtOf(m.disk_used, m.disk_total), "", null, [90, 97]);
+  for (const [id, e] of st.meters) if (!used.includes(e)) { e.remove(); st.meters.delete(id); }
+  card.grid.append(...used);
 }
 
 // --------------------------------------------------------- active requests
@@ -692,16 +713,26 @@ const handlers = {
     for (const r of ev.active || []) startRequest(r);
     recent = ev.recent || [];
     if (ev.upstream) $("upstream").textContent = ev.upstream.replace(/^https?:\/\//, "");
-    machine = ev.machine || null; trend = ev.machine_trend || [];
+    machines.clear(); $("machines").replaceChildren();
+    // (ev.machine, ev.machine_trend: a server from before several machines, until it is restarted)
+    for (const r of ev.machines || (ev.machine ? [ev.machine] : [])) {
+      machines.set(r.name || "", { r, trend: (ev.machine_trends || {})[r.name || ""] || ev.machine_trend || [] });
+      renderMachine(r.name || "");
+    }
     renderHistStatus(ev.history);
-    renderPs(); renderModels(); renderRecent(); renderMachine();
+    renderPs(); renderModels(); renderRecent();
   },
   machine(ev) {
-    machine = ev;
-    trend.push({ ts: ev.ts, cpu: ev.cpu_pct, mem: ratio(ev.mem_used, ev.mem_total),
-                 gpus: (ev.gpus || []).map((g) => ({ util: g.util_pct, mem: ratio(g.mem_used, g.mem_total) })) });
-    if (trend.length > TREND_MAX) trend = trend.slice(-TREND_MAX);
-    if (!document.hidden) renderMachine();
+    const name = ev.name || "";
+    let st = machines.get(name);
+    if (!st) machines.set(name, st = { r: ev, trend: [] });
+    if (ev.offline || ev.waiting) st.r = { ...st.r, waiting: false, ...ev };     // keep the last reading, marked
+    else {
+      st.r = ev;
+      st.trend.push(trendPoint(ev));
+      if (st.trend.length > TREND_MAX) st.trend = st.trend.slice(-TREND_MAX);
+    }
+    if (!document.hidden) renderMachine(name);
   },
   models(ev) { models = ev.models || []; psOk = ev.ok; psError = ev.error; renderPs(); renderModels(); },
   started(ev) { startRequest({ ...ev }); renderModels(); },
@@ -1178,7 +1209,7 @@ window.addEventListener("resize", () => {
 // charts lists the requests that were running in the window shown.
 const MH_PRESETS = { "1h": 3600, "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400 };
 const MH_MIN_SPAN = 600;
-const mh = { preset: "24h", from: null, to: null, stack: [], data: null, seq: 0, crosses: [], dragging: false };
+const mh = { machine: null, preset: "24h", from: null, to: null, stack: [], data: null, seq: 0, crosses: [], dragging: false };
 function mhWindow() {
   if (mh.from != null) return [mh.from, mh.to];
   const t = Math.floor(now());
@@ -1323,6 +1354,16 @@ function renderMachineHistory() {
   const zoomed = mh.from != null;
   for (const b of $("mh-range").querySelectorAll("button")) b.classList.toggle("on", !zoomed && b.dataset.r === mh.preset);
   $("mh-back").classList.toggle("hidden", !mh.stack.length);
+  // machines with saved readings, in the Live page's order; the picker only with more than one
+  const order = [...machines.keys()];
+  const names = (d.machines || []).map((m) => m.name).sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
+  $("mh-machines").classList.toggle("hidden", names.length < 2);
+  $("mh-machines").replaceChildren(...names.map((name) => {
+    const b = el("button", name === d.machine ? "on" : "", name || "(unnamed)");
+    b.addEventListener("click", () => { mh.machine = name; loadMachine(); });
+    return b;
+  }));
+  document.querySelector("#view-machine h1").textContent = names.length > 1 && d.machine ? "Machine · " + d.machine : "Machine";
   $("mh-info").textContent = fmtSpan(d.from, d.to) + " · one point = " + fmtStep(d.step) +
     (d.step <= 60 ? " (the finest)" : "");
   const pctFmt = (v) => Math.round(v) + "%", degFmt = (v) => Math.round(v) + " °C";
@@ -1371,11 +1412,13 @@ async function loadMachine() {
   const seq = ++mh.seq, [a, b] = mhWindow();
   $("mh-charts").classList.add("loading");
   try {
-    const d = await getJSON("/lltop/api/machine?" + new URLSearchParams({ from: a, to: b }));
+    const q = { from: a, to: b };
+    if (mh.machine != null) q.machine = mh.machine;
+    const d = await getJSON("/lltop/api/machine?" + new URLSearchParams(q));
     if (seq !== mh.seq) return;
     mh.data = d;
     renderMachineHistory();
-    if (d.first == null) $("mh-info").textContent = "No machine readings saved yet. One is saved every minute while lltop runs with the machine card on.";
+    if (d.first == null) $("mh-info").textContent = "No readings saved yet" + (d.machine ? " for " + d.machine : "") + ". One is saved every minute while lltop runs with the machine card on.";
     loadMachineRequests(d.from, d.to);
   } catch (e) {
     if (seq !== mh.seq) return;

@@ -33,7 +33,8 @@ doing right now, which app is using it, and how fast it really is.
   for each NVIDIA GPU its use, memory, temperature and power draw (through `nvidia-smi`),
   each with a trend line of the last 10 minutes. Read from `/proc` and `/sys`, no extra
   package. These are the meters of the machine lltop runs on: when Ollama is on another
-  machine, turn the card off with `--no-machine`.
+  machine, turn the card off with `--no-machine`, or show that machine's meters too
+  (see [Several machines](#several-machines)).
 - **One card per model**: loaded or not, size, how much of it sits in GPU memory vs
   system RAM, context length, and a countdown to when Ollama unloads it (from `/api/ps`,
   polled every 3 s).
@@ -93,6 +94,8 @@ and open the dashboard at <http://127.0.0.1:11435/lltop/>.
 | `--pg-dsn` | `LLTOP_PG_DSN` | off | PostgreSQL for the full history, e.g. `postgresql://lltop@localhost:5432/lltop`. Password in `~/.pgpass`, not here. |
 | `--app-headers` | `LLTOP_APP_HEADERS` | see below | Request headers that name the calling app. |
 | `--no-machine` | `LLTOP_MACHINE=off` | on | Leave out the machine card (CPU, memory, disk, temperature, GPU). |
+| `--machines` | `LLTOP_MACHINES` | none | Other machines to show beside this one: `NAME=URL` or just `URL`, comma-separated. See [Several machines](#several-machines). |
+| `--meters-only` | `LLTOP_METERS_ONLY=on` | off | Serve only this machine's meters, for another lltop's `--machines`. No proxy, no dashboard. |
 | `--log-level` | `LLTOP_LOG_LEVEL` | `info` | |
 
 ### Docker
@@ -145,12 +148,43 @@ start lltop with `LLTOP_PG_DSN=postgresql://lltop@host:5432/lltop`. If PostgreSQ
 unreachable, lltop keeps working: rows wait in a queue (10,000) and are written when it is
 back. On the first start it also copies the requests from the history file.
 
-The machine's readings go to a second table, `machine_minutes`: one row per minute with
+The machine's readings go to a second table, `machine_minutes`: one row per machine and minute with
 the averages and the peaks (CPU, memory, temperature, each GPU), numbers only. That is
-about 1,440 small rows a day; nothing deletes them yet. The Machine tab's history starts
+about 1,440 small rows a day per machine; nothing deletes them yet. The Machine tab's history starts
 when lltop first runs with this version.
 
-### Run as a service (systemd)
+### Several machines
+
+One dashboard can show the meters of more than one machine: a card per machine on the
+Live page, and a machine picker on the Machine tab.
+
+On each other machine, run lltop with only its meters (no proxy, no dashboard, nothing
+stored), listening on the network:
+
+```sh
+lltop --meters-only --host 0.0.0.0
+```
+
+On the machine with the dashboard, name them:
+
+```sh
+lltop --machines "gpu-box=http://192.168.1.20:11435, nas=http://192.168.1.30:11435"
+```
+
+lltop fetches each machine's last reading every `--poll` seconds (a plain GET of
+`/lltop/api/meters`). A machine that stops answering keeps its card, greyed out and marked
+"not answering"; its readings resume by themselves. With PostgreSQL, every machine gets
+its own rows in `machine_minutes`.
+
+- `/lltop/api/meters` has no login: anyone who can reach the port can read the host name
+  and its CPU, memory, disk, temperature and GPU numbers. Nothing else is served in
+  `--meters-only` mode. Keep it on a network you trust.
+- A whole lltop (one that fronts an Ollama on that machine) answers `/lltop/api/meters`
+  too, so it can be listed in `--machines` as it is.
+- Only the meters are collected. Requests appear on the dashboard of the lltop they go
+  through: the request list and the "Requests started" chart are always this lltop's own.
+
+## Run as a service (systemd)
 
 [`contrib/systemd/lltop.service`](contrib/systemd/lltop.service) runs lltop as a systemd
 user service that starts at boot and restarts if it crashes:
@@ -232,7 +266,8 @@ trust: there is no login.
 | `/lltop/api/history` | PostgreSQL history: `?model=&status=&endpoint=&client=&q=&before=&limit=`, and `&running_from=&running_to=` (epoch seconds) for the requests running in a time window |
 | `/lltop/api/history/{id}` | One request in full |
 | `/lltop/api/history-facets` | Models, endpoints and statuses with counts |
-| `/lltop/api/machine` | Machine readings for the Machine tab: `?from=&to=` (epoch seconds); the points get coarser as the window grows (1 minute up to 1 day) |
+| `/lltop/api/machine` | Machine readings for the Machine tab: `?from=&to=` (epoch seconds), `&machine=` (a name; default: this machine); the points get coarser as the window grows (1 minute up to 1 day) |
+| `/lltop/api/meters` | This machine's last reading (numbers and the host name), for another lltop's `--machines` |
 | `/lltop/api/stats` | Aggregates for the Charts tab: `?range=24h\|7d\|30d\|90d&model=&tz=` |
 
 ## Development

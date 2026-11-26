@@ -7,8 +7,8 @@ broken dashboard can therefore never slow down a request going to Ollama.
 
 State: loaded models from /api/ps, requests in progress (with the text generated so
 far, so a browser that opens mid-request sees it all), and the last RECENT_MAX finished
-requests. Those can be saved to a file (history.py) so they survive a restart. Plus the
-last machine reading and a short trend of them (machine.py), in memory only.
+requests. Those can be saved to a file (history.py) so they survive a restart. Plus, per
+machine, the last reading and a short trend of them (machine.py), in memory only.
 """
 
 import asyncio
@@ -60,8 +60,8 @@ class Hub:
         self.queue_max = queue_max
         self.dirty = False                   # recent changed since the last save
         self.sink = None                     # called with each finished request (store.py)
-        self.machine: dict | None = None     # the last reading of machine.py
-        self.machine_trend: deque[dict] = deque(maxlen=TREND_MAX)
+        self.machines: dict[str, dict] = {}  # name -> the last reading of machine.py
+        self.machine_trends: dict[str, deque[dict]] = {}
 
     # ------------------------------------------------------------------ browsers
 
@@ -77,7 +77,9 @@ class Hub:
         return {"type": "snapshot", "ts": time.time(), "models": self.models,
                 "history": self.history_status(),
                 "ps_ok": self.ps_ok, "ps_error": self.ps_error,
-                "machine": self.machine, "machine_trend": list(self.machine_trend),
+                # this machine first, then the others in the order they were configured
+                "machines": sorted(self.machines.values(), key=lambda m: bool(m.get("remote"))),
+                "machine_trends": {name: list(t) for name, t in self.machine_trends.items()},
                 "active": list(self.active.values()), "recent": list(self.recent)}
 
     # ------------------------------------------------------------------ events
@@ -133,8 +135,13 @@ class Hub:
             self.ps_ok = ev.get("ok")
             self.ps_error = ev.get("error")
         elif kind == "machine":
-            self.machine = ev
-            self.machine_trend.append(trend_point(ev))
+            name = ev.get("name") or ""
+            if ev.get("offline") or ev.get("waiting"):     # no reading: keep the last one, marked
+                kept = {k: v for k, v in self.machines.get(name, {}).items() if k not in ("waiting", "offline")}
+                self.machines[name] = {**kept, **ev}
+                return
+            self.machines[name] = ev
+            self.machine_trends.setdefault(name, deque(maxlen=TREND_MAX)).append(trend_point(ev))
 
     def history_status(self) -> dict:
         store = getattr(self.sink, "__self__", None)     # the PgStore behind the sink

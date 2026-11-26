@@ -74,10 +74,11 @@ ALTER TABLE requests ADD COLUMN IF NOT EXISTS app text;   -- added after the fir
 CREATE INDEX IF NOT EXISTS requests_started_idx ON requests (started_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS requests_model_idx ON requests (model, started_at DESC);
 CREATE INDEX IF NOT EXISTS requests_search_idx ON requests USING gin (search);
--- One row per minute of machine readings (machine.MinuteLog): averages, and peaks where
--- a short spike matters. Percentages are 0-100. No prompts or other text.
+-- One row per machine and minute of readings (machine.MinuteLog): averages, and peaks
+-- where a short spike matters. Percentages are 0-100. No prompts or other text.
 CREATE TABLE IF NOT EXISTS machine_minutes (
-    minute      timestamptz PRIMARY KEY,
+    machine     text NOT NULL DEFAULT '',   -- its name on the dashboard
+    minute      timestamptz NOT NULL,
     samples     integer NOT NULL,
     cpu         real,               -- average use
     cpu_max     real,               -- highest reading in the minute
@@ -87,15 +88,28 @@ CREATE TABLE IF NOT EXISTS machine_minutes (
     load1       real,
     temp        real,               -- highest CPU temperature, °C
     disk        real,
-    gpus        jsonb               -- [{name, util, util_max, mem, temp, watts}], one per GPU
+    gpus        jsonb,              -- [{name, util, util_max, mem, temp, watts}], one per GPU
+    PRIMARY KEY (machine, minute)
 );
+-- A table from before several machines were tracked: one row per minute, no name.
+ALTER TABLE machine_minutes ADD COLUMN IF NOT EXISTS machine text NOT NULL DEFAULT '';
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'machine_minutes'::regclass
+               AND contype = 'p' AND array_length(conkey, 1) = 1) THEN
+        ALTER TABLE machine_minutes DROP CONSTRAINT machine_minutes_pkey;
+        ALTER TABLE machine_minutes ADD PRIMARY KEY (machine, minute);
+    END IF;
+END $$;
 """
 
-MACHINE_COLUMNS = ("minute", "samples", "cpu", "cpu_max", "mem", "mem_used", "mem_total", "load1",
+MACHINE_COLUMNS = ("machine", "minute", "samples", "cpu", "cpu_max", "mem", "mem_used", "mem_total", "load1",
                    "temp", "disk", "gpus")
 MACHINE_UPSERT = (f"INSERT INTO machine_minutes ({', '.join(MACHINE_COLUMNS)}) VALUES "
-                  f"({', '.join(f'%({c})s' for c in MACHINE_COLUMNS)}) ON CONFLICT (minute) DO UPDATE SET "
-                  + ", ".join(f"{c} = EXCLUDED.{c}" for c in MACHINE_COLUMNS if c != "minute"))
+                  f"({', '.join(f'%({c})s' for c in MACHINE_COLUMNS)}) ON CONFLICT (machine, minute) DO UPDATE SET "
+                  + ", ".join(f"{c} = EXCLUDED.{c}" for c in MACHINE_COLUMNS if c not in ("machine", "minute")))
+# Rows saved before machines had names belong to the machine lltop runs on.
+MACHINE_ADOPT = """UPDATE machine_minutes m SET machine = %(name)s WHERE m.machine = '' AND NOT EXISTS
+                   (SELECT 1 FROM machine_minutes n WHERE n.machine = %(name)s AND n.minute = m.minute)"""
 # Bucket sizes for the Machine tab, in seconds: the smallest that keeps a window to
 # about MACHINE_POINTS points.
 MACHINE_STEPS = (60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400)
@@ -232,6 +246,8 @@ class PgStore:
         self._read_conn = None
         self._read_lock = asyncio.Lock()
         self._schema_ready = False
+        self._schema_lock = asyncio.Lock()
+        self.local_machine = ""              # set by the app: the name of the machine lltop runs on
         self._holding = 0                    # a row taken off the queue, not yet written
 
     # ------------------------------------------------------------ connections
@@ -239,9 +255,12 @@ class PgStore:
     async def _connect(self):
         conn = await psycopg.AsyncConnection.connect(self.dsn, autocommit=True,
                                                      connect_timeout=5, row_factory=dict_row)
-        if not self._schema_ready:
-            await conn.execute(SCHEMA)
-            self._schema_ready = True
+        async with self._schema_lock:
+            if not self._schema_ready:
+                await conn.execute(SCHEMA)
+                if self.local_machine:
+                    await conn.execute(MACHINE_ADOPT, {"name": self.local_machine})
+                self._schema_ready = True
         return conn
 
     def _down(self, e: Exception) -> None:
@@ -274,7 +293,7 @@ class PgStore:
         """Queue one minute of machine readings (machine.MinuteLog). Never blocks or raises."""
         try:
             self.queue.put_nowait((MACHINE_UPSERT, {
-                **{c: row.get(c) for c in MACHINE_COLUMNS},
+                **{c: row.get(c) for c in MACHINE_COLUMNS}, "machine": row.get("machine") or "",
                 "minute": _ts(row["minute"]), "gpus": Jsonb(_clean(row.get("gpus") or []))}))
         except asyncio.QueueFull:
             pass                              # Postgres has been down for a long time
@@ -417,34 +436,41 @@ class PgStore:
                 out[r["kind"]].append({"value": r["value"], "count": r["n"]})
         return out
 
-    async def machine_history(self, start: float, end: float) -> dict:
-        """The Machine tab: the machine's readings between two moments (epoch seconds), in
+    async def machine_history(self, start: float, end: float, machine: str | None = None) -> dict:
+        """The Machine tab: one machine's readings between two moments (epoch seconds), in
         buckets sized so any window is about MACHINE_POINTS points or fewer, plus the
         requests started in each bucket. A bucket without readings (lltop was not running)
-        holds None, so lines show a gap there."""
+        holds None, so lines show a gap there. Without a name: the machine lltop runs on,
+        or else the first one with readings. "machines" lists every machine with readings."""
+        known = await self._read("""SELECT machine AS name, min(minute) AS first, max(minute) AS last
+                                    FROM machine_minutes GROUP BY 1 ORDER BY 1""")
+        names = [m["name"] for m in known]
+        if machine is None:
+            machine = self.local_machine if self.local_machine in names or not names else names[0]
         end = max(end, start + 60)
         step = machine_step(end - start)
         first = int(start // step) * step
         times = list(range(first, int(end), step))
-        p = {"step": step, "first": _ts(first), "end": _ts(end)}
+        p = {"step": step, "first": _ts(first), "end": _ts(end), "machine": machine}
         bucket = "date_bin(%(step)s * interval '1 second', {col}, %(first)s)"
         scope = "{col} >= %(first)s AND {col} < %(end)s"
         rows = await self._read(f"""
             SELECT {bucket.format(col='minute')} AS b, avg(cpu) AS cpu, max(cpu_max) AS cpu_max,
                    avg(mem) AS mem, avg(load1) AS load1, max(temp) AS temp, avg(disk) AS disk,
                    max(mem_total) AS mem_total
-            FROM machine_minutes WHERE {scope.format(col='minute')} GROUP BY 1""", p)
+            FROM machine_minutes WHERE machine = %(machine)s AND {scope.format(col='minute')}
+            GROUP BY 1""", p)
         gpu_rows = await self._read(f"""
             SELECT {bucket.format(col='minute')} AS b, g.n, max(g.e->>'name') AS name,
                    avg((g.e->>'util')::real) AS util, max((g.e->>'util_max')::real) AS util_max,
                    avg((g.e->>'mem')::real) AS mem, max((g.e->>'temp')::real) AS temp,
                    avg((g.e->>'watts')::real) AS watts
             FROM machine_minutes, jsonb_array_elements(gpus) WITH ORDINALITY AS g(e, n)
-            WHERE {scope.format(col='minute')} GROUP BY 1, 2""", p)
+            WHERE machine = %(machine)s AND {scope.format(col='minute')} GROUP BY 1, 2""", p)
         req_rows = await self._read(f"""
             SELECT {bucket.format(col='started_at')} AS b, count(*) AS requests
             FROM requests WHERE {scope.format(col='started_at')} GROUP BY 1""", p)
-        span = (await self._read("SELECT min(minute) AS first, max(minute) AS last FROM machine_minutes"))[0]
+        span = next((m for m in known if m["name"] == machine), {"first": None, "last": None})
         index = {t: i for i, t in enumerate(times)}
         fields = ("cpu", "cpu_max", "mem", "load1", "temp", "disk")
         series = {k: [None] * len(times) for k in fields}
@@ -472,7 +498,9 @@ class PgStore:
                 series["requests"][i] = r["requests"]
         return {"from": first, "to": int(end), "step": step, "times": times, "series": series,
                 "gpus": [gpus[n] for n in sorted(gpus)], "mem_total": mem_total,
-                "first": _epoch(span["first"]), "last": _epoch(span["last"])}
+                "first": _epoch(span["first"]), "last": _epoch(span["last"]), "machine": machine,
+                "machines": [{"name": m["name"], "first": _epoch(m["first"]), "last": _epoch(m["last"])}
+                             for m in known]}
 
     async def stats(self, range_: str = "24h", model: str | None = None, tz: str | None = None) -> dict:
         """Everything the Charts tab draws, for one time range (and optionally one model).

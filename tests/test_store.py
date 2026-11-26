@@ -265,6 +265,46 @@ async def test_machine_history_with_nothing_saved(store):
 
 
 @needs_pg
+async def test_machine_history_keeps_machines_apart(store):
+    base = 1_790_000_040
+    store.local_machine = "here"
+    for i in range(3):
+        store.record_machine(minute_row(i, machine="here"))
+        store.record_machine(minute_row(i, machine="gpu-box", cpu=80.0, gpus=[]))
+    await machine_written(store, 6)
+    mine = await store.machine_history(base, base + 600)                 # default: this machine
+    assert mine["machine"] == "here" and mine["series"]["cpu"][:3] == [10.0, 11.0, 12.0]
+    assert [m["name"] for m in mine["machines"]] == ["gpu-box", "here"] and mine["machines"][0]["first"] == base
+    far = await store.machine_history(base, base + 600, "gpu-box")
+    assert far["series"]["cpu"][:4] == [80.0, 80.0, 80.0, None] and far["gpus"] == []
+    none = await store.machine_history(base, base + 600, "nobody")
+    assert none["first"] is None and set(none["series"]["cpu"]) == {None} and len(none["machines"]) == 2
+
+
+@needs_pg
+async def test_a_table_from_before_machine_names_is_upgraded():
+    with psycopg.connect(TEST_DSN, autocommit=True) as conn:
+        conn.execute("DROP TABLE IF EXISTS machine_minutes")
+        conn.execute("CREATE TABLE machine_minutes (minute timestamptz PRIMARY KEY, samples integer NOT NULL, "
+                     "cpu real, cpu_max real, mem real, mem_used bigint, mem_total bigint, load1 real, "
+                     "temp real, disk real, gpus jsonb)")
+        conn.execute("INSERT INTO machine_minutes (minute, samples, cpu) VALUES (to_timestamp(1790000040), 20, 7)")
+    s = PgStore(TEST_DSN)
+    s.local_machine = "here"
+    task = asyncio.create_task(s.run())
+    try:
+        s.record_machine(minute_row(1, machine="here"))
+        s.record_machine(minute_row(1, machine="gpu-box"))            # the same minute, another machine
+        await machine_written(s, 2)
+        d = await s.machine_history(1_790_000_040, 1_790_000_640)
+        assert d["machine"] == "here" and d["series"]["cpu"][:2] == [7.0, 11.0]   # the old row is now "here"
+        assert [m["name"] for m in d["machines"]] == ["gpu-box", "here"]
+    finally:
+        task.cancel()
+        await s.close()
+
+
+@needs_pg
 async def test_search_requests_running_in_a_window(store):
     t = 1_790_000_000.0
     store.record(record(0, ts=t, ended_ts=t + 5))              # over before the window

@@ -9,11 +9,15 @@
     /lltop/api/history-facets  models, endpoints, statuses with counts (for the filters)
     /lltop/api/stats           aggregates for the Charts tab: ?range=24h|7d|30d|90d &model= &tz=
     /lltop/api/machine         machine readings for the Machine tab: ?from= &to= (epoch seconds)
+                               &machine= (a name; default: this machine)
+    /lltop/api/meters          this machine's last reading, for another lltop's --machines
     anything else     forwarded to Ollama unchanged (proxy.forward)
 """
 
 import asyncio
 import logging
+import socket
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -24,7 +28,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from .history import History, save_forever, save_now
 from .store import PgStore
 from .hub import Hub
-from .machine import Machine, MinuteLog
+from .machine import METERS_PATH, Machine, MinuteLog, Remote, collect_forever
 from .machine import poll_forever as poll_machine
 from .proxy import APP_HEADERS, forward
 from .ps import poll_forever
@@ -56,13 +60,49 @@ async def merge_from_postgres(store: PgStore, hub: Hub) -> None:
              len(rows), len(file_only))
 
 
+def last_reading(hub: Hub, name: str) -> JSONResponse:
+    """This machine's last reading and its age, for another lltop that collects it."""
+    ev = hub.machines.get(name)
+    if not ev or ev.get("remote") or "ts" not in ev:
+        return JSONResponse({"error": "no machine reading (the meters are off, or not "
+                             "supported on this system)"}, status_code=404)
+    return JSONResponse({**ev, "age_s": round(time.time() - ev["ts"], 1)})
+
+
+def create_meters_app(*, poll_interval: float = 3.0, machine=True) -> FastAPI:
+    """`lltop --meters-only`: nothing but this machine's meters at /lltop/api/meters. No
+    proxy, no dashboard, no prompts, nothing stored; for a machine whose readings another
+    lltop shows (--machines)."""
+    hub = Hub()
+    reader = Machine() if machine is True else machine
+    name = getattr(reader, "name", None) or socket.gethostname()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        task = asyncio.create_task(poll_machine(reader, hub, poll_interval, name=name))
+        log.info("meters only: %s answers with this machine's readings", METERS_PATH)
+        yield
+        task.cancel()
+
+    app = FastAPI(title="lltop meters", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.hub = hub
+
+    @app.get(METERS_PATH, include_in_schema=False)
+    async def meters():
+        return last_reading(hub, name)
+
+    return app
+
+
 def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float = 3.0,
                transport: httpx.AsyncBaseTransport | None = None, hub: Hub | None = None,
                start_poller: bool = True, history_path: str | Path | None = None,
                pg_dsn: str | None = None, app_headers: tuple[str, ...] | None = None,
-               machine=None) -> FastAPI:
+               machine=None, machines: list[tuple[str, str]] | None = None,
+               machines_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
     """machine: True reads this machine's meters (machine.Machine), or pass a reader with
-    an async read(); None or False leaves the machine card out."""
+    an async read(); None or False leaves the machine card out.
+    machines: [(name, url)] of other machines whose lltop answers /lltop/api/meters."""
     hub = hub or Hub()
     history = History(history_path) if history_path else None
     if history:
@@ -76,17 +116,28 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
         base_url=upstream, transport=transport,
         timeout=httpx.Timeout(connect=10.0, read=None, write=60.0, pool=None))
 
-    minutes = MinuteLog()
+    reader = Machine() if machine is True else machine
+    local_name = (getattr(reader, "name", None) or socket.gethostname()) if reader else ""
+    logs = {local_name: MinuteLog(local_name)} if reader else {}
+    if store:
+        store.local_machine = local_name
+    remotes_client = httpx.AsyncClient(transport=machines_transport, timeout=4.0, follow_redirects=False)
+    remotes = [Remote(name, url, remotes_client) for name, url in machines or []]
+    save_minute = store.record_machine if store else None
 
     @asynccontextmanager
     async def lifespan(app):
         tasks = []
         if start_poller:
             tasks.append(asyncio.create_task(poll_forever(client, hub, poll_interval)))
-        if machine:
-            reader = Machine() if machine is True else machine
+        if reader:
             tasks.append(asyncio.create_task(poll_machine(
-                reader, hub, poll_interval, minutes, store.record_machine if store else None)))
+                reader, hub, poll_interval, logs[local_name], save_minute, local_name)))
+        for remote in remotes:
+            hub.publish({"type": "machine", "name": remote.name, "remote": True, "waiting": True})
+            logs[remote.name] = MinuteLog(remote.name)
+            tasks.append(asyncio.create_task(collect_forever(
+                remote, hub, poll_interval, logs[remote.name], save_minute)))
         if history:
             tasks.append(asyncio.create_task(save_forever(history, hub)))
             log.info("history in %s (%d requests loaded)", history.path, len(hub.recent))
@@ -98,9 +149,11 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
         for task in tasks:
             task.cancel()
         hub.interrupt_active()             # running requests are kept as 'interrupted'
-        last_minute = minutes.flush()
-        if store and last_minute:
-            store.record_machine(last_minute)
+        for minutes in logs.values():
+            last_minute = minutes.flush()
+            if store and last_minute:
+                store.record_machine(last_minute)
+        await remotes_client.aclose()
         if history:
             await save_now(history, hub)
         if store:
@@ -125,6 +178,10 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
     @app.get("/lltop/api/state", include_in_schema=False)
     async def state():
         return JSONResponse({**hub.snapshot(), "upstream": upstream})
+
+    @app.get(METERS_PATH, include_in_schema=False)
+    async def meters():
+        return last_reading(hub, local_name)
 
     def no_store():
         return JSONResponse({"enabled": False, "error": "Postgres history is not configured "
@@ -166,10 +223,11 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
 
     @app.get("/lltop/api/machine", include_in_schema=False)
     async def machine_history(start: float = Query(..., alias="from", ge=0, le=4e9),
-                              end: float = Query(..., alias="to", ge=0, le=4e9)):
+                              end: float = Query(..., alias="to", ge=0, le=4e9),
+                              machine: str | None = Query(None, max_length=80)):
         if not store:
             return no_store()
-        return await from_store(lambda: store.machine_history(start, end))
+        return await from_store(lambda: store.machine_history(start, end, machine))
 
     @app.get("/lltop/api/history/{request_id}", include_in_schema=False)
     async def history_get(request_id: str):
