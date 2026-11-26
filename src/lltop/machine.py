@@ -1,5 +1,7 @@
 """Meters for the machine lltop runs on: CPU, memory, disk, temperature, NVIDIA GPUs.
 
+With PostgreSQL configured, a row per minute is kept (MinuteLog) for the Machine tab.
+
 Read straight from Linux's /proc and /sys (no extra package), GPUs from `nvidia-smi`
 when it is installed. Every few seconds a 'machine' event goes to the hub. Anything
 that can't be read is left out (None); on a system without /proc (macOS, Windows) the
@@ -147,7 +149,64 @@ class Machine:
         return ev
 
 
-async def poll_forever(machine, hub, interval: float) -> None:
+def _avg(values) -> float | None:
+    v = [x for x in values if x is not None]
+    return round(sum(v) / len(v), 2) if v else None
+
+
+def _max(values) -> float | None:
+    v = [x for x in values if x is not None]
+    return max(v) if v else None
+
+
+def _pct(used, total) -> float | None:
+    return 100 * used / total if used is not None and total else None
+
+
+class MinuteLog:
+    """Turns the readings into one row per minute for the history (store.py table
+    machine_minutes): averages, and the peak for CPU, GPU use and temperatures."""
+
+    def __init__(self):
+        self.minute: int | None = None
+        self.readings: list[dict] = []
+
+    def add(self, ev: dict) -> dict | None:
+        """Add a reading; returns the finished row when a new minute begins."""
+        minute = int(ev["ts"] // 60) * 60
+        done = self.flush() if self.minute is not None and minute != self.minute else None
+        self.minute = minute
+        self.readings.append(ev)
+        return done
+
+    def flush(self) -> dict | None:
+        """The row of the minute so far (None if there are no readings); starts afresh."""
+        r, minute = self.readings, self.minute
+        self.readings, self.minute = [], None
+        if not r:
+            return None
+        gpus = []
+        for i in range(max(len(e.get("gpus") or []) for e in r)):
+            g = [e["gpus"][i] for e in r if len(e.get("gpus") or []) > i]
+            gpus.append({"name": g[-1].get("name"),
+                         "util": _avg(x.get("util_pct") for x in g),
+                         "util_max": _max(x.get("util_pct") for x in g),
+                         "mem": _avg(_pct(x.get("mem_used"), x.get("mem_total")) for x in g),
+                         "temp": _max(x.get("temp_c") for x in g),
+                         "watts": _avg(x.get("watts") for x in g)})
+        mem_used = _avg(e.get("mem_used") for e in r)
+        return {"minute": minute, "samples": len(r),
+                "cpu": _avg(e.get("cpu_pct") for e in r), "cpu_max": _max(e.get("cpu_pct") for e in r),
+                "mem": _avg(_pct(e.get("mem_used"), e.get("mem_total")) for e in r),
+                "mem_used": None if mem_used is None else int(mem_used),
+                "mem_total": r[-1].get("mem_total"), "load1": _avg(e.get("load1") for e in r),
+                "temp": _max(e.get("temp_c") for e in r),
+                "disk": _pct(r[-1].get("disk_used"), r[-1].get("disk_total")), "gpus": gpus}
+
+
+async def poll_forever(machine, hub, interval: float, minutes: MinuteLog | None = None,
+                       sink=None) -> None:
+    """minutes + sink: each finished minute of readings is handed to sink (the history)."""
     try:
         await machine.read()                       # the first reading only sets the CPU baseline
     except Exception as e:
@@ -156,6 +215,11 @@ async def poll_forever(machine, hub, interval: float) -> None:
     while True:
         await asyncio.sleep(interval)
         try:
-            hub.publish(await machine.read())
+            ev = await machine.read()
+            hub.publish(ev)                        # sets ev["ts"]
+            if minutes is not None and sink is not None:
+                row = minutes.add(ev)
+                if row:
+                    sink(row)
         except Exception:
             log.debug("machine: reading failed", exc_info=True)

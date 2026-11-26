@@ -16,7 +16,7 @@ import pytest
 
 from lltop.app import create_app, merge_from_postgres
 from lltop.hub import Hub
-from lltop.store import PgStore, from_row, preview_of, to_row
+from lltop.store import PgStore, from_row, machine_step, preview_of, to_row
 
 pytestmark = pytest.mark.anyio
 
@@ -109,6 +109,7 @@ async def test_history_endpoints_without_postgres_configured():
 async def store():
     with psycopg.connect(TEST_DSN, autocommit=True) as conn:
         conn.execute("DROP TABLE IF EXISTS requests")
+        conn.execute("DROP TABLE IF EXISTS machine_minutes")
     s = PgStore(TEST_DSN)
     task = asyncio.create_task(s.run())
     yield s
@@ -201,3 +202,75 @@ async def test_stats_for_the_charts(store):
     only = await store.stats("7d", "fast", "Not/AZone")                  # bad tz -> UTC
     assert only["tz"] == "UTC" and only["unit"] == "6h" and only["models"] == ["fast"]
     assert only["kpis"]["requests"] == 1
+
+
+# ------------------------------------------------------------- machine history
+
+def test_machine_step_keeps_a_window_to_about_180_points():
+    assert machine_step(600) == 60 and machine_step(3600) == 60
+    assert machine_step(86400) == 600 and machine_step(7 * 86400) == 3600
+    assert machine_step(30 * 86400) == 21600 and machine_step(5 * 365 * 86400) == 86400
+
+
+async def test_record_machine_never_blocks_without_postgres():
+    store = PgStore(NOWHERE, queue_max=1)
+    for i in range(3):
+        store.record_machine({"minute": 1_790_000_040 + 60 * i, "samples": 20, "cpu": 5.0})
+    assert store.queue.qsize() == 1 and store.dropped == 0
+
+
+def minute_row(i, **over):
+    row = {"minute": 1_790_000_040 + 60 * i, "samples": 20, "cpu": 10.0 + i, "cpu_max": 50.0 + i,
+           "mem": 40.0, "mem_used": 4 * 2**30, "mem_total": 10 * 2**30, "load1": 1.0, "temp": 50.0 + i,
+           "disk": 30.0, "gpus": [{"name": "RTX", "util": 60.0 + i, "util_max": 90.0, "mem": 25.0,
+                                    "temp": 70.0, "watts": 200.0}]}
+    row.update(over)
+    return row
+
+
+async def machine_written(store, n):
+    async with asyncio.timeout(5):
+        while store.machine_written < n:
+            await asyncio.sleep(0.02)
+
+
+@needs_pg
+async def test_machine_history_buckets_gaps_and_requests(store):
+    base = 1_790_000_040                                  # a whole minute
+    for i in (0, 1, 2, 5):                                # minutes 3 and 4: lltop was not running
+        store.record_machine(minute_row(i))
+    store.record_machine(minute_row(5, cpu=99.0))         # the same minute again replaces it
+    store.record(record(0, ts=base + 70, ended_ts=base + 200))
+    await machine_written(store, 5)
+    await written(store, 1)
+    d = await store.machine_history(base, base + 600)
+    assert d["step"] == 60 and d["times"][0] == base and len(d["times"]) == 10
+    assert d["series"]["cpu"][:6] == [10.0, 11.0, 12.0, None, None, 99.0]
+    assert d["series"]["cpu_max"][1] == 51.0 and d["series"]["temp"][2] == 52.0
+    assert d["series"]["requests"][:3] == [0, 1, 0]
+    assert d["gpus"][0]["name"] == "RTX" and d["gpus"][0]["util"][:4] == [60.0, 61.0, 62.0, None]
+    assert d["mem_total"] == 10 * 2**30 and d["first"] == base and d["last"] == base + 300
+    # a day-long window uses 10-minute points: averages, and the highest peak
+    day = await store.machine_history(base - 80000, base + 6400)
+    assert day["step"] == 600
+    i = day["times"].index(base // 600 * 600)
+    assert day["series"]["cpu_max"][i] == 55.0 and day["series"]["requests"][i] == 1
+    assert day["series"]["cpu"][i] == pytest.approx((10 + 11 + 12 + 99) / 4, abs=0.1)
+
+
+@needs_pg
+async def test_machine_history_with_nothing_saved(store):
+    d = await store.machine_history(1_790_000_000, 1_790_003_600)
+    assert d["first"] is None and d["gpus"] == [] and set(d["series"]["cpu"]) == {None}
+
+
+@needs_pg
+async def test_search_requests_running_in_a_window(store):
+    t = 1_790_000_000.0
+    store.record(record(0, ts=t, ended_ts=t + 5))              # over before the window
+    store.record(record(1, ts=t + 50, ended_ts=t + 150))       # running as it starts
+    store.record(record(2, ts=t + 120, ended_ts=t + 130))      # inside it
+    store.record(record(3, ts=t + 300, ended_ts=t + 310))      # after it
+    await written(store, 4)
+    page = await store.search(running_from=t + 100, running_to=t + 200)
+    assert [r["id"] for r in page["rows"]] == ["req002", "req001"]

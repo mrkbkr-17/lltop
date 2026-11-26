@@ -6,7 +6,7 @@ import pytest
 
 from conftest import drain
 from lltop.hub import TREND_MAX, Hub
-from lltop.machine import Machine, parse_nvidia, poll_forever, temperature
+from lltop.machine import Machine, MinuteLog, parse_nvidia, poll_forever, temperature
 
 pytestmark = pytest.mark.anyio
 
@@ -108,3 +108,47 @@ def test_trend_is_bounded_and_holds_percentages_only():
     assert len(hub.machine_trend) == TREND_MAX
     assert hub.machine_trend[-1] == {"ts": hub.machine["ts"], "cpu": 10.0, "mem": 25.0,
                                      "gpus": [{"util": 50.0, "mem": 50.0}]}
+
+
+def reading(ts, cpu, gpu=None, temp=50.0):
+    return {"type": "machine", "ts": ts, "cpu_pct": cpu, "mem_used": 2, "mem_total": 8, "load1": 1.0,
+            "temp_c": temp, "disk_used": 1, "disk_total": 4,
+            "gpus": [] if gpu is None else [{"name": "RTX", "util_pct": gpu, "mem_used": 1, "mem_total": 4,
+                                             "temp_c": 60.0, "watts": 100.0}]}
+
+
+def test_minute_log_averages_and_keeps_peaks():
+    log = MinuteLog()
+    assert log.add(reading(120.0, 10.0, gpu=20.0)) is None
+    assert log.add(reading(150.0, 30.0, gpu=80.0, temp=71.0)) is None
+    row = log.add(reading(181.0, 99.0))                # a new minute: the last one is done
+    assert row["minute"] == 120 and row["samples"] == 2
+    assert row["cpu"] == 20.0 and row["cpu_max"] == 30.0 and row["temp"] == 71.0
+    assert row["mem"] == 25.0 and row["mem_total"] == 8 and row["disk"] == 25.0
+    assert row["gpus"] == [{"name": "RTX", "util": 50.0, "util_max": 80.0, "mem": 25.0, "temp": 60.0, "watts": 100.0}]
+    last = log.flush()                                 # what is left when lltop stops
+    assert last["minute"] == 180 and last["cpu"] == 99.0 and last["gpus"] == []
+    assert log.flush() is None
+
+
+async def test_poller_hands_finished_minutes_to_the_history(tmp_path):
+    fake_system(tmp_path)
+
+    class Clock(Machine):                              # a reading every "40 seconds"
+        t = 1000.0
+
+        async def read(self):
+            ev = await super().read()
+            Clock.t += 40
+            return {**ev, "ts": Clock.t}
+
+    rows = []
+    task = asyncio.create_task(poll_forever(Clock(tmp_path, nvidia_smi="", disk=str(tmp_path)), Hub(), 0.01,
+                                            MinuteLog(), rows.append))
+    try:
+        async with asyncio.timeout(2):
+            while len(rows) < 2:
+                await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+    assert rows[1]["minute"] == rows[0]["minute"] + 60 and rows[0]["samples"] in (1, 2)

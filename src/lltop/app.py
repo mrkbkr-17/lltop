@@ -8,6 +8,7 @@
     /lltop/api/history/{id}    one request in full
     /lltop/api/history-facets  models, endpoints, statuses with counts (for the filters)
     /lltop/api/stats           aggregates for the Charts tab: ?range=24h|7d|30d|90d &model= &tz=
+    /lltop/api/machine         machine readings for the Machine tab: ?from= &to= (epoch seconds)
     anything else     forwarded to Ollama unchanged (proxy.forward)
 """
 
@@ -23,7 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from .history import History, save_forever, save_now
 from .store import PgStore
 from .hub import Hub
-from .machine import Machine
+from .machine import Machine, MinuteLog
 from .machine import poll_forever as poll_machine
 from .proxy import APP_HEADERS, forward
 from .ps import poll_forever
@@ -75,6 +76,8 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
         base_url=upstream, transport=transport,
         timeout=httpx.Timeout(connect=10.0, read=None, write=60.0, pool=None))
 
+    minutes = MinuteLog()
+
     @asynccontextmanager
     async def lifespan(app):
         tasks = []
@@ -82,7 +85,8 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
             tasks.append(asyncio.create_task(poll_forever(client, hub, poll_interval)))
         if machine:
             reader = Machine() if machine is True else machine
-            tasks.append(asyncio.create_task(poll_machine(reader, hub, poll_interval)))
+            tasks.append(asyncio.create_task(poll_machine(
+                reader, hub, poll_interval, minutes, store.record_machine if store else None)))
         if history:
             tasks.append(asyncio.create_task(save_forever(history, hub)))
             log.info("history in %s (%d requests loaded)", history.path, len(hub.recent))
@@ -94,6 +98,9 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
         for task in tasks:
             task.cancel()
         hub.interrupt_active()             # running requests are kept as 'interrupted'
+        last_minute = minutes.flush()
+        if store and last_minute:
+            store.record_machine(last_minute)
         if history:
             await save_now(history, hub)
         if store:
@@ -134,12 +141,14 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
     async def history_list(model: str | None = None, status: str | None = None,
                            endpoint: str | None = None, client: str | None = None,
                            q: str | None = None, before: str | None = None,
-                           limit: int = Query(50, ge=1, le=200)):
+                           limit: int = Query(50, ge=1, le=200),
+                           running_from: float | None = None, running_to: float | None = None):
         if not store:
             return no_store()
         async def read():
             page = await store.search(model=model, status=status, endpoint=endpoint,
-                                      client=client, q=q, before=before, limit=limit)
+                                      client=client, q=q, before=before, limit=limit,
+                                      running_from=running_from, running_to=running_to)
             return {**page, "status": store.status()}
         return await from_store(read)
 
@@ -154,6 +163,13 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
         if not store:
             return no_store()
         return await from_store(lambda: store.stats(range, model, tz))
+
+    @app.get("/lltop/api/machine", include_in_schema=False)
+    async def machine_history(start: float = Query(..., alias="from", ge=0, le=4e9),
+                              end: float = Query(..., alias="to", ge=0, le=4e9)):
+        if not store:
+            return no_store()
+        return await from_store(lambda: store.machine_history(start, end))
 
     @app.get("/lltop/api/history/{request_id}", include_in_schema=False)
     async def history_get(request_id: str):

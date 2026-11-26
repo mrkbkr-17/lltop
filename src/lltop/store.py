@@ -74,7 +74,36 @@ ALTER TABLE requests ADD COLUMN IF NOT EXISTS app text;   -- added after the fir
 CREATE INDEX IF NOT EXISTS requests_started_idx ON requests (started_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS requests_model_idx ON requests (model, started_at DESC);
 CREATE INDEX IF NOT EXISTS requests_search_idx ON requests USING gin (search);
+-- One row per minute of machine readings (machine.MinuteLog): averages, and peaks where
+-- a short spike matters. Percentages are 0-100. No prompts or other text.
+CREATE TABLE IF NOT EXISTS machine_minutes (
+    minute      timestamptz PRIMARY KEY,
+    samples     integer NOT NULL,
+    cpu         real,               -- average use
+    cpu_max     real,               -- highest reading in the minute
+    mem         real,               -- average use
+    mem_used    bigint,
+    mem_total   bigint,
+    load1       real,
+    temp        real,               -- highest CPU temperature, °C
+    disk        real,
+    gpus        jsonb               -- [{name, util, util_max, mem, temp, watts}], one per GPU
+);
 """
+
+MACHINE_COLUMNS = ("minute", "samples", "cpu", "cpu_max", "mem", "mem_used", "mem_total", "load1",
+                   "temp", "disk", "gpus")
+MACHINE_UPSERT = (f"INSERT INTO machine_minutes ({', '.join(MACHINE_COLUMNS)}) VALUES "
+                  f"({', '.join(f'%({c})s' for c in MACHINE_COLUMNS)}) ON CONFLICT (minute) DO UPDATE SET "
+                  + ", ".join(f"{c} = EXCLUDED.{c}" for c in MACHINE_COLUMNS if c != "minute"))
+# Bucket sizes for the Machine tab, in seconds: the smallest that keeps a window to
+# about MACHINE_POINTS points.
+MACHINE_STEPS = (60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400)
+MACHINE_POINTS = 180
+
+
+def machine_step(span_s: float) -> int:
+    return next((s for s in MACHINE_STEPS if span_s / s <= MACHINE_POINTS), MACHINE_STEPS[-1])
 
 STAT_COLUMNS = ("prompt_tokens", "output_tokens", "prompt_tokens_per_s", "output_tokens_per_s",
                 "rate_source", "ttft_s", "load_s", "prompt_eval_s", "eval_s", "total_s", "wall_s",
@@ -198,6 +227,7 @@ class PgStore:
         self.error: str | None = None
         self.dropped = 0
         self.written = 0
+        self.machine_written = 0
         self._write_conn = None
         self._read_conn = None
         self._read_lock = asyncio.Lock()
@@ -234,24 +264,42 @@ class PgStore:
     def record(self, rec: dict) -> None:
         """Queue a finished request for saving. Never blocks, never raises."""
         try:
-            self.queue.put_nowait(to_row(rec))
+            self.queue.put_nowait((UPSERT, to_row(rec)))
         except asyncio.QueueFull:
             self.dropped += 1
         except Exception:
             log.exception("postgres history: could not prepare request %s", rec.get("id"))
 
+    def record_machine(self, row: dict) -> None:
+        """Queue one minute of machine readings (machine.MinuteLog). Never blocks or raises."""
+        try:
+            self.queue.put_nowait((MACHINE_UPSERT, {
+                **{c: row.get(c) for c in MACHINE_COLUMNS},
+                "minute": _ts(row["minute"]), "gpus": Jsonb(_clean(row.get("gpus") or []))}))
+        except asyncio.QueueFull:
+            pass                              # Postgres has been down for a long time
+        except Exception:
+            log.exception("postgres history: could not prepare a machine reading")
+
+    async def _write(self, item) -> None:
+        sql, row = item
+        if self._write_conn is None or self._write_conn.closed:
+            self._write_conn = await self._connect()
+        await self._write_conn.execute(sql, row)
+        if sql is UPSERT:
+            self.written += 1
+        else:
+            self.machine_written += 1
+
     async def run(self) -> None:
         """Background task: write queued rows, retrying while Postgres is down."""
         backoff = 1.0
         while True:
-            row = await self.queue.get()
+            item = await self.queue.get()
             self._holding = 1
             while True:
                 try:
-                    if self._write_conn is None or self._write_conn.closed:
-                        self._write_conn = await self._connect()
-                    await self._write_conn.execute(UPSERT, row)
-                    self.written += 1
+                    await self._write(item)
                     self._up()
                     backoff = 1.0
                     break
@@ -262,7 +310,8 @@ class PgStore:
                     backoff = min(backoff * 2, 30.0)
                 except Exception:
                     # Postgres rejected this row (a data problem): skip it, keep the rest.
-                    log.exception("postgres history: could not save request %s", row.get("id"))
+                    log.exception("postgres history: could not save %s",
+                                  item[1].get("id") or item[1].get("minute"))
                     break
             self._holding = 0
 
@@ -271,15 +320,11 @@ class PgStore:
         try:
             async with asyncio.timeout(timeout):
                 while not self.queue.empty():
-                    row = self.queue.get_nowait()
-                    if self._write_conn is None or self._write_conn.closed:
-                        self._write_conn = await self._connect()
-                    await self._write_conn.execute(UPSERT, row)
-                    self.written += 1
+                    await self._write(self.queue.get_nowait())
         except Exception as e:
             left = self.queue.qsize()
             if left:
-                log.warning("postgres history: %d requests not saved at shutdown (%s)", left, e)
+                log.warning("postgres history: %d rows not saved at shutdown (%s)", left, e)
 
     async def _close(self, attr: str) -> None:
         conn = getattr(self, attr)
@@ -321,9 +366,18 @@ class PgStore:
         return from_row(rows[0]) if rows else None
 
     async def search(self, *, model=None, status=None, endpoint=None, client=None, q=None,
-                     before=None, limit: int = 50) -> dict:
-        """Newest first. `before` is the `next` value of the previous page."""
+                     before=None, limit: int = 50, running_from: float | None = None,
+                     running_to: float | None = None) -> dict:
+        """Newest first. `before` is the `next` value of the previous page. running_from /
+        running_to (epoch seconds) keep the requests that were running at some moment in
+        that window."""
         where, params = [], {}
+        if running_to is not None:
+            where.append("started_at < %(run_to)s")
+            params["run_to"] = _ts(running_to)
+        if running_from is not None:
+            where.append("coalesce(ended_at, started_at) >= %(run_from)s")
+            params["run_from"] = _ts(running_from)
         for col, val in (("model", model), ("status", status), ("endpoint", endpoint)):
             if val:
                 where.append(f"{col} = %({col})s")
@@ -362,6 +416,63 @@ class PgStore:
             if r["value"] is not None:
                 out[r["kind"]].append({"value": r["value"], "count": r["n"]})
         return out
+
+    async def machine_history(self, start: float, end: float) -> dict:
+        """The Machine tab: the machine's readings between two moments (epoch seconds), in
+        buckets sized so any window is about MACHINE_POINTS points or fewer, plus the
+        requests started in each bucket. A bucket without readings (lltop was not running)
+        holds None, so lines show a gap there."""
+        end = max(end, start + 60)
+        step = machine_step(end - start)
+        first = int(start // step) * step
+        times = list(range(first, int(end), step))
+        p = {"step": step, "first": _ts(first), "end": _ts(end)}
+        bucket = "date_bin(%(step)s * interval '1 second', {col}, %(first)s)"
+        scope = "{col} >= %(first)s AND {col} < %(end)s"
+        rows = await self._read(f"""
+            SELECT {bucket.format(col='minute')} AS b, avg(cpu) AS cpu, max(cpu_max) AS cpu_max,
+                   avg(mem) AS mem, avg(load1) AS load1, max(temp) AS temp, avg(disk) AS disk,
+                   max(mem_total) AS mem_total
+            FROM machine_minutes WHERE {scope.format(col='minute')} GROUP BY 1""", p)
+        gpu_rows = await self._read(f"""
+            SELECT {bucket.format(col='minute')} AS b, g.n, max(g.e->>'name') AS name,
+                   avg((g.e->>'util')::real) AS util, max((g.e->>'util_max')::real) AS util_max,
+                   avg((g.e->>'mem')::real) AS mem, max((g.e->>'temp')::real) AS temp,
+                   avg((g.e->>'watts')::real) AS watts
+            FROM machine_minutes, jsonb_array_elements(gpus) WITH ORDINALITY AS g(e, n)
+            WHERE {scope.format(col='minute')} GROUP BY 1, 2""", p)
+        req_rows = await self._read(f"""
+            SELECT {bucket.format(col='started_at')} AS b, count(*) AS requests
+            FROM requests WHERE {scope.format(col='started_at')} GROUP BY 1""", p)
+        span = (await self._read("SELECT min(minute) AS first, max(minute) AS last FROM machine_minutes"))[0]
+        index = {t: i for i, t in enumerate(times)}
+        fields = ("cpu", "cpu_max", "mem", "load1", "temp", "disk")
+        series = {k: [None] * len(times) for k in fields}
+        series["requests"] = [0] * len(times)
+        gpus: dict[int, dict] = {}
+        mem_total = None
+        for r in rows:
+            i = index.get(int(r["b"].timestamp()))
+            if i is not None:
+                for k in fields:
+                    series[k][i] = None if r[k] is None else round(r[k], 1)
+                mem_total = r["mem_total"] or mem_total
+        for r in gpu_rows:
+            i = index.get(int(r["b"].timestamp()))
+            if i is None:
+                continue
+            g = gpus.setdefault(r["n"], {"name": r["name"], **{
+                k: [None] * len(times) for k in ("util", "util_max", "mem", "temp", "watts")}})
+            g["name"] = r["name"] or g["name"]
+            for k in ("util", "util_max", "mem", "temp", "watts"):
+                g[k][i] = None if r[k] is None else round(r[k], 1)
+        for r in req_rows:
+            i = index.get(int(r["b"].timestamp()))
+            if i is not None:
+                series["requests"][i] = r["requests"]
+        return {"from": first, "to": int(end), "step": step, "times": times, "series": series,
+                "gpus": [gpus[n] for n in sorted(gpus)], "mem_total": mem_total,
+                "first": _epoch(span["first"]), "last": _epoch(span["last"])}
 
     async def stats(self, range_: str = "24h", model: str | None = None, tz: str | None = None) -> dict:
         """Everything the Charts tab draws, for one time range (and optionally one model).

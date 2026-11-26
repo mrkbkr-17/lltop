@@ -22,7 +22,7 @@ doing right now, which app is using it, and how fast it really is.
 
 > Status: milestone 2. The last 50 requests survive restarts (a JSON file); with
 > PostgreSQL configured, every request is kept, searchable in the History tab and charted
-> in the Charts tab.
+> in the Charts tab, and the machine's readings are kept for the Machine tab.
 
 ## What it shows
 
@@ -48,6 +48,14 @@ doing right now, which app is using it, and how fast it really is.
   cold loads as headline numbers; requests over time stacked by model; output speed and
   wait for the first token over time, one line per model (the wait includes time spent
   in Ollama's queue); and which clients use the models. Each chart has a table view.
+- **Machine tab** (with PostgreSQL): the machine's CPU, memory, GPU use, GPU memory and
+  temperature over the last hour, 24 hours, 7 or 30 days, with the requests started in
+  each period underneath. Drag across any chart to zoom into that span, or click one
+  point; you can go down to one point per minute, and "Zoom out" walks back. Below the
+  charts is a table of the requests that were running in the window shown, so a spike can
+  be traced to what caused it. Each chart has a table view.
+
+  ![The Machine tab: CPU, memory and GPU use over 24 hours](docs/machine.png)
 - **The last 50 finished requests** (saved to a file, so a restart keeps them): prompt and output tokens, time to first token,
   prompt and output tokens/s, total time, cold or warm model load, status (finished,
   error, cancelled). Click a row for the full prompt, response and Ollama's raw stats.
@@ -137,6 +145,11 @@ start lltop with `LLTOP_PG_DSN=postgresql://lltop@host:5432/lltop`. If PostgreSQ
 unreachable, lltop keeps working: rows wait in a queue (10,000) and are written when it is
 back. On the first start it also copies the requests from the history file.
 
+The machine's readings go to a second table, `machine_minutes`: one row per minute with
+the averages and the peaks (CPU, memory, temperature, each GPU), numbers only. That is
+about 1,440 small rows a day; nothing deletes them yet. The Machine tab's history starts
+when lltop first runs with this version.
+
 ### Run as a service (systemd)
 
 [`contrib/systemd/lltop.service`](contrib/systemd/lltop.service) runs lltop as a systemd
@@ -186,8 +199,9 @@ trust: there is no login.
   `load_duration` is a second or more (or, when Ollama gives no stats, when `/api/ps`
   didn't list the model as the request started). `/v1/chat/completions` reports no
   durations, so its output speed is estimated from chunk timing (marked `*`).
-- **Store** (`store.py`, optional): writes each finished request to PostgreSQL from a
-  background queue and answers the History tab's queries.
+- **Store** (`store.py`, optional): writes each finished request, and each minute of
+  machine readings, to PostgreSQL from a background queue and answers the History, Charts
+  and Machine tabs' queries.
 - **Machine** (`machine.py`): reads the meters every `--poll` seconds. On a system
   without `/proc` (macOS, Windows) it switches itself off and the card is not shown.
 - **Hub** (`hub.py`): the in-memory state (loaded models, requests in progress, last 50,
@@ -215,9 +229,10 @@ trust: there is no login.
 | `/lltop/` | The dashboard |
 | `/lltop/ws` | WebSocket: a `snapshot` on connect, then every event |
 | `/lltop/api/state` | The snapshot as JSON |
-| `/lltop/api/history` | PostgreSQL history: `?model=&status=&endpoint=&client=&q=&before=&limit=` |
+| `/lltop/api/history` | PostgreSQL history: `?model=&status=&endpoint=&client=&q=&before=&limit=`, and `&running_from=&running_to=` (epoch seconds) for the requests running in a time window |
 | `/lltop/api/history/{id}` | One request in full |
 | `/lltop/api/history-facets` | Models, endpoints and statuses with counts |
+| `/lltop/api/machine` | Machine readings for the Machine tab: `?from=&to=` (epoch seconds); the points get coarser as the window grows (1 minute up to 1 day) |
 | `/lltop/api/stats` | Aggregates for the Charts tab: `?range=24h\|7d\|30d\|90d&model=&tz=` |
 
 ## Development
@@ -240,7 +255,7 @@ Ollama.
 
 ## Roadmap
 
-- Retention settings (delete history older than N days).
+- Retention settings (delete requests and machine readings older than N days).
 - A React dashboard.
 - Running as the default endpoint in front of Ollama for other gateways.
 
