@@ -29,6 +29,11 @@ def main() -> None:
                    help="Postgres connection string for the full, searchable history (env "
                         "LLTOP_PG_DSN, e.g. postgresql://lltop@localhost:5432/lltop; put the "
                         "password in ~/.pgpass, not here). Off when unset.")
+    p.add_argument("--no-machine", action="store_true",
+                   default=os.environ.get("LLTOP_MACHINE", "").lower() in ("off", "0", "no", "false"),
+                   help="leave out the machine card (CPU, memory, disk, temperature, GPU of the "
+                        "machine lltop runs on; env LLTOP_MACHINE=off). Use it when Ollama "
+                        "runs on another machine.")
     p.add_argument("--app-headers", default=os.environ.get("LLTOP_APP_HEADERS"),
                    help="comma-separated request headers that name the calling app, first found "
                         "wins (env LLTOP_APP_HEADERS; default: x-lltop-app and LiteLLM's "
@@ -47,7 +52,7 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(max(logging.WARNING, logging.getLogger().level))
     history = None if args.no_history else (args.history or default_path())
     app = create_app(args.upstream.rstrip("/"), poll_interval=args.poll, history_path=history,
-                     pg_dsn=args.pg_dsn or None,
+                     pg_dsn=args.pg_dsn or None, machine=not args.no_machine,
                      app_headers=tuple(h.strip().lower() for h in args.app_headers.split(",") if h.strip())
                      if args.app_headers else None)
     # Don't wait for long generations to finish when stopping: after 5 s the connections

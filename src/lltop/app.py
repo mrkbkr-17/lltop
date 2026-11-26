@@ -23,6 +23,8 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from .history import History, save_forever, save_now
 from .store import PgStore
 from .hub import Hub
+from .machine import Machine
+from .machine import poll_forever as poll_machine
 from .proxy import APP_HEADERS, forward
 from .ps import poll_forever
 
@@ -56,7 +58,10 @@ async def merge_from_postgres(store: PgStore, hub: Hub) -> None:
 def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float = 3.0,
                transport: httpx.AsyncBaseTransport | None = None, hub: Hub | None = None,
                start_poller: bool = True, history_path: str | Path | None = None,
-               pg_dsn: str | None = None, app_headers: tuple[str, ...] | None = None) -> FastAPI:
+               pg_dsn: str | None = None, app_headers: tuple[str, ...] | None = None,
+               machine=None) -> FastAPI:
+    """machine: True reads this machine's meters (machine.Machine), or pass a reader with
+    an async read(); None or False leaves the machine card out."""
     hub = hub or Hub()
     history = History(history_path) if history_path else None
     if history:
@@ -75,6 +80,9 @@ def create_app(upstream: str = "http://127.0.0.1:11434", *, poll_interval: float
         tasks = []
         if start_poller:
             tasks.append(asyncio.create_task(poll_forever(client, hub, poll_interval)))
+        if machine:
+            reader = Machine() if machine is True else machine
+            tasks.append(asyncio.create_task(poll_machine(reader, hub, poll_interval)))
         if history:
             tasks.append(asyncio.create_task(save_forever(history, hub)))
             log.info("history in %s (%d requests loaded)", history.path, len(hub.recent))

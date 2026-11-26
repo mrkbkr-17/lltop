@@ -7,7 +7,8 @@ broken dashboard can therefore never slow down a request going to Ollama.
 
 State: loaded models from /api/ps, requests in progress (with the text generated so
 far, so a browser that opens mid-request sees it all), and the last RECENT_MAX finished
-requests. Those can be saved to a file (history.py) so they survive a restart.
+requests. Those can be saved to a file (history.py) so they survive a restart. Plus the
+last machine reading and a short trend of them (machine.py), in memory only.
 """
 
 import asyncio
@@ -20,6 +21,7 @@ log = logging.getLogger("lltop")
 RECENT_MAX = 50
 QUEUE_MAX = 5000            # events buffered per browser before it is dropped
 MAX_TEXT = 1_000_000        # characters of response/thinking kept per request
+TREND_MAX = 200             # machine readings kept for the sparklines (10 min at 3 s)
 
 
 def model_key(name: str | None) -> str:
@@ -27,6 +29,18 @@ def model_key(name: str | None) -> str:
     if not name:
         return ""
     return name if ":" in name.rsplit("/", 1)[-1] else name + ":latest"
+
+
+def pct(used, total) -> float | None:
+    return round(100 * used / total, 1) if used is not None and total else None
+
+
+def trend_point(ev: dict) -> dict:
+    """What the sparklines need from one machine reading: percentages only."""
+    return {"ts": ev.get("ts"), "cpu": ev.get("cpu_pct"),
+            "mem": pct(ev.get("mem_used"), ev.get("mem_total")),
+            "gpus": [{"util": g.get("util_pct"), "mem": pct(g.get("mem_used"), g.get("mem_total"))}
+                     for g in ev.get("gpus") or []]}
 
 
 class Subscriber:
@@ -46,6 +60,8 @@ class Hub:
         self.queue_max = queue_max
         self.dirty = False                   # recent changed since the last save
         self.sink = None                     # called with each finished request (store.py)
+        self.machine: dict | None = None     # the last reading of machine.py
+        self.machine_trend: deque[dict] = deque(maxlen=TREND_MAX)
 
     # ------------------------------------------------------------------ browsers
 
@@ -61,6 +77,7 @@ class Hub:
         return {"type": "snapshot", "ts": time.time(), "models": self.models,
                 "history": self.history_status(),
                 "ps_ok": self.ps_ok, "ps_error": self.ps_error,
+                "machine": self.machine, "machine_trend": list(self.machine_trend),
                 "active": list(self.active.values()), "recent": list(self.recent)}
 
     # ------------------------------------------------------------------ events
@@ -115,6 +132,9 @@ class Hub:
             self.models = ev["models"]
             self.ps_ok = ev.get("ok")
             self.ps_error = ev.get("error")
+        elif kind == "machine":
+            self.machine = ev
+            self.machine_trend.append(trend_point(ev))
 
     def history_status(self) -> dict:
         store = getattr(self.sink, "__self__", None)     # the PgStore behind the sink

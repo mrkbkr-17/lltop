@@ -6,7 +6,7 @@
 [![license: MIT](https://img.shields.io/github/license/mrkbkr-17/lltop)](LICENSE)
 ![python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
 
-![The lltop dashboard: two loaded models, one request streaming its thinking and response, and a table of finished requests with token counts and speeds](docs/dashboard.png)
+![The lltop dashboard: headline numbers, CPU, memory and GPU meters of the machine, two loaded models each streaming a response, and a table of finished requests with token counts and speeds](docs/dashboard.png)
 
 A live monitoring dashboard for [Ollama](https://ollama.com). Put it in front of Ollama
 and watch every request as it happens: which model, who sent it, the prompt, the thinking
@@ -25,6 +25,14 @@ doing right now, which app is using it, and how fast it really is.
 
 ## What it shows
 
+- **Headline numbers**: requests in progress and how many still wait for their first
+  token, the output speed right now, and, over the last 50 requests, the median speed,
+  the median wait for the first token, cold model loads and failures.
+- **The machine** (Linux): CPU, memory and disk as meters, CPU temperature and load, and
+  for each NVIDIA GPU its use, memory, temperature and power draw (through `nvidia-smi`),
+  each with a trend line of the last 10 minutes. Read from `/proc` and `/sys`, no extra
+  package. These are the meters of the machine lltop runs on: when Ollama is on another
+  machine, turn the card off with `--no-machine`.
 - **One card per model**: loaded or not, size, how much of it sits in GPU memory vs
   system RAM, context length, and a countdown to when Ollama unloads it (from `/api/ps`,
   polled every 3 s).
@@ -75,6 +83,7 @@ and open the dashboard at <http://127.0.0.1:11435/lltop/>.
 | `--history` | `LLTOP_HISTORY` | `~/.local/state/lltop/history.json` | Where the last 50 requests are saved. `--no-history` keeps them in memory only. |
 | `--pg-dsn` | `LLTOP_PG_DSN` | off | PostgreSQL for the full history, e.g. `postgresql://lltop@localhost:5432/lltop`. Password in `~/.pgpass`, not here. |
 | `--app-headers` | `LLTOP_APP_HEADERS` | see below | Request headers that name the calling app. |
+| `--no-machine` | `LLTOP_MACHINE=off` | on | Leave out the machine card (CPU, memory, disk, temperature, GPU). |
 | `--log-level` | `LLTOP_LOG_LEVEL` | `info` | |
 
 ### Docker
@@ -178,7 +187,10 @@ trust: there is no login.
   durations, so its output speed is estimated from chunk timing (marked `*`).
 - **Store** (`store.py`, optional): writes each finished request to PostgreSQL from a
   background queue and answers the History tab's queries.
-- **Hub** (`hub.py`): the in-memory state (loaded models, requests in progress, last 50)
+- **Machine** (`machine.py`): reads the meters every `--poll` seconds. On a system
+  without `/proc` (macOS, Windows) it switches itself off and the card is not shown.
+- **Hub** (`hub.py`): the in-memory state (loaded models, requests in progress, last 50,
+  the last 200 machine readings)
   and the fan-out to browsers. `history.py` saves the last 50 to a JSON file (at most
   every 2 s, and on shutdown, when requests still running are kept as `interrupted`). Each browser gets its own bounded queue; one that falls
   behind is disconnected and reconnects to a fresh snapshot.

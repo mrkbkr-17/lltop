@@ -8,76 +8,138 @@
   :root {
     --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #677085; --line: #e1e4ea;
     --accent: #2f6fdb; --ok: #1f8a4c; --warn: #b26b00; --bad: #c4352b; --think: #7a5bc4;
-    --gpu: #2f6fdb; --cpu: #9aa3b5; --code: #f1f3f6;
+    --gpu: #2f6fdb; --cpu: #9aa3b5; --code: #f1f3f6; --soft: #f7f8fa;
+    --side: #15191f; --side-ink: #e6e9ee; --side-muted: #9aa3af; --side-on: #262c35; --side-hover: #1d222a;
+    --radius: 12px; --shadow: 0 1px 2px rgba(16, 24, 40, .04);
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #12151b; --card: #1b1f27; --text: #e3e7ee; --muted: #8e97a8; --line: #2b313c;
       --accent: #6fa0ff; --ok: #4cc283; --warn: #e0a33a; --bad: #ff7468; --think: #b49cff;
-      --gpu: #6fa0ff; --cpu: #566074; --code: #232833;
+      --gpu: #6fa0ff; --cpu: #566074; --code: #232833; --soft: #20252e;
+      --side: #0d1015; --side-on: #1f2530; --side-hover: #171c24; --shadow: none;
     }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  body { margin: 0; font: 14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
          background: var(--bg); color: var(--text); }
-  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px;
-           border-bottom: 1px solid var(--line); background: var(--card); position: sticky; top: 0; z-index: 1; }
-  header h1 { font-size: 16px; margin: 0; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .muted { color: var(--muted); }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+  .hidden { display: none !important; }
+  .spacer { flex: 1; }
+
+  /* the frame: a dark sidebar beside the page; on a narrow screen it becomes a bar on top */
+  .shell { display: flex; min-height: 100vh; }
+  .side { flex: none; width: 216px; background: var(--side); color: var(--side-ink); padding: 22px 14px;
+          display: flex; flex-direction: column; gap: 22px; position: sticky; top: 0; height: 100vh; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; }
+  .brand svg { flex: none; }
+  .brand strong { display: block; font-size: 16px; font-weight: 700; letter-spacing: -.01em; }
+  .brand span { display: block; font-size: 12px; color: var(--side-muted); }
+  nav.tabs { display: flex; flex-direction: column; gap: 2px; }
+  nav.tabs a { display: flex; align-items: center; justify-content: space-between; min-height: 38px; padding: 0 12px;
+               border-radius: 8px; color: #c9ced6; text-decoration: none; font-weight: 500; }
+  nav.tabs a:hover { background: var(--side-hover); }
+  nav.tabs a.on { background: var(--side-on); color: #fff; font-weight: 600; }
+  nav.tabs .count { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--accent); color: #fff; }
+  .side :focus-visible { outline-color: #9cc4f5; }
+  .side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding: 0 8px; font-size: 12px; color: var(--side-muted); }
+  .side-foot > div { display: flex; align-items: baseline; gap: 8px; overflow-wrap: anywhere; }
+  .side-foot .dot { position: relative; top: -1px; }
+  .side-foot b { color: var(--side-ink); font-weight: 600; }
+  .side-foot .problem { color: #ffb4ab; }
+  .page { flex: 1; min-width: 0; }
+  main { padding: 28px 32px 56px; display: flex; flex-direction: column; gap: 22px; max-width: 1500px; margin: 0 auto; }
+  .page-head h1 { font-size: 26px; font-weight: 700; letter-spacing: -.01em; margin: 0 0 2px; }
+  .page-head p { margin: 0; color: var(--muted); }
+  @media (max-width: 860px) {
+    .shell { flex-direction: column; }
+    .side { width: auto; height: auto; position: static; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 12px 16px; }
+    .brand span { display: none; }
+    nav.tabs { flex-direction: row; }
+    .side-foot { margin: 0 0 0 auto; flex-direction: row; flex-wrap: wrap; gap: 4px 14px; padding: 0; }
+    main { padding: 18px 14px 40px; }
+  }
+
+  .dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: #9aa3af; }
   .dot.live { background: var(--ok); } .dot.bad { background: var(--bad); }
-  main { padding: 20px; display: grid; gap: 24px; max-width: 1600px; margin: 0 auto; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
-  .models { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 16px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; display: flex; align-items: baseline; gap: 8px; }
+  h2 .muted { font-size: 13px; font-weight: 400; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; min-width: 0; box-shadow: var(--shadow); }
   .card.idle { opacity: .7; }
   .card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  .card-head .name { font-weight: 600; font-size: 15px; }
-  .badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+  .card-head .name { font-weight: 600; font-size: 16px; }
+  .badge { font-size: 11px; font-weight: 600; padding: 1px 9px; border-radius: 999px; border: 1px solid currentColor; }
   .badge.loaded { color: var(--ok); } .badge.unloaded { color: var(--muted); }
-  .facts { display: flex; gap: 18px; flex-wrap: wrap; margin: 8px 0; color: var(--muted); font-size: 13px; }
+  .facts { display: flex; gap: 6px 18px; flex-wrap: wrap; margin: 8px 0; color: var(--muted); font-size: 13px; }
   .facts b { color: var(--text); font-weight: 600; }
-  .bar { height: 8px; border-radius: 4px; background: var(--cpu); overflow: hidden; margin: 6px 0 2px; }
+
+  /* headline numbers */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; box-shadow: var(--shadow); }
+  .tile .t-label { font-size: 12px; color: var(--muted); }
+  .tile .t-value { font-size: 24px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .tile .t-sub { font-size: 12px; color: var(--muted); }
+
+  /* machine card: a meter per row of the grid, the track a lighter step of the fill */
+  .meters { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px 28px; margin-top: 12px; }
+  .meter-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; }
+  .meter-top span:first-child { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meter-top b { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .track { --fill: var(--accent); height: 8px; border-radius: 999px; margin-top: 6px; overflow: hidden;
+           background: color-mix(in srgb, var(--fill) 16%, var(--card)); }
+  .track > span { display: block; height: 100%; border-radius: 999px; background: var(--fill); transition: width .4s ease; }
+  .track.warn { --fill: var(--warn); } .track.bad { --fill: var(--bad); }
+  .meter-note { font-size: 12px; color: var(--muted); margin-top: 4px; min-height: 18px; }
+  .meter-note .flag { font-weight: 600; color: var(--text); }
+  svg.spark { display: block; width: 100%; height: 30px; margin-top: 4px; overflow: visible; }
+  svg.spark polyline { fill: none; stroke: var(--cpu); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+  svg.spark line { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  @media (prefers-reduced-motion: reduce) { .track > span { transition: none; } .cursor::after { animation: none !important; } }
+
+  /* model cards and the requests running in them */
+  .models { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 16px; align-items: start; }
+  .bar { height: 8px; border-radius: 999px; background: var(--cpu); overflow: hidden; margin: 6px 0 4px; }
   .bar > span { display: block; height: 100%; background: var(--gpu); }
   .legend { font-size: 12px; color: var(--muted); }
   .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 4px 0 10px; vertical-align: -1px; }
-  .req { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
-  .req-head { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
-  .req-head .phase { font-weight: 600; }
+  .req { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 12px; }
+  .req-head { display: flex; gap: 6px 12px; flex-wrap: wrap; align-items: baseline; font-size: 12px; color: var(--muted); }
+  .req-head .phase { font-weight: 600; padding: 1px 9px; border-radius: 999px; background: var(--soft); }
   .phase.waiting { color: var(--warn); } .phase.thinking { color: var(--think); } .phase.generating { color: var(--accent); }
-  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 8px 0 2px; }
-  .text { white-space: pre-wrap; word-break: break-word; background: var(--code); border-radius: 6px;
-          padding: 8px 10px; max-height: 260px; overflow: auto; font: 13px/1.45 ui-monospace, "Cascadia Mono", Menlo, monospace; }
+  .label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 10px 0 3px; }
+  .text { white-space: pre-wrap; word-break: break-word; background: var(--code); border-radius: 8px;
+          padding: 9px 11px; max-height: 260px; overflow: auto; font: 13px/1.5 ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; }
   .text.thinking { color: var(--think); max-height: 160px; }
   .text.prompt { max-height: 140px; }
   .cursor::after { content: "▍"; color: var(--accent); animation: blink 1s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 6px; }
   .msg { margin: 6px 0; } .msg .role { font-weight: 600; font-size: 12px; color: var(--muted); }
-  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
-  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .kv { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+
+  /* tables */
+  .table-wrap { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow-x: auto; box-shadow: var(--shadow); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: 0; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; background: var(--soft); }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  tr.row { cursor: pointer; } tr.row:hover td { background: var(--code); }
+  tr.row { cursor: pointer; } tr.row:hover td { background: var(--soft); }
   tr.detail td { white-space: normal; background: var(--bg); }
+  td[class^="status-"]::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 7px; vertical-align: 1px; }
   .status-finished { color: var(--ok); } .status-error { color: var(--bad); } .status-cancelled, .status-interrupted { color: var(--warn); }
   .cold { color: var(--warn); font-weight: 600; }
-  .empty { color: var(--muted); padding: 10px 0; }
+  .empty { color: var(--muted); padding: 14px 2px; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } .models { grid-template-columns: 1fr; } }
-  .kv { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
-  nav.tabs { display: flex; gap: 4px; margin-left: 8px; }
-  nav.tabs a { padding: 4px 12px; border-radius: 6px; color: var(--muted); text-decoration: none; font-weight: 600; }
-  nav.tabs a.on { background: var(--code); color: var(--text); }
-  .spacer { flex: 1; }
-  .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .filters select, .filters input, button { font: inherit; color: var(--text); background: var(--card);
-    border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; }
+    border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
   .filters input[type=search] { min-width: 280px; flex: 1; max-width: 520px; }
   button { cursor: pointer; } button:hover { border-color: var(--accent); }
   td.preview { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; color: var(--muted); }
-  .bar-row { display: flex; gap: 12px; align-items: center; margin-top: 10px; }
-  .hidden { display: none !important; }
+  .bar-row { display: flex; gap: 12px; align-items: center; }
   /* charts: categorical slots in fixed order (validated light on #fff, dark on #1b1f27) */
   :root { --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
           --grid: #eceef2; --axis: #c9ced8; --other: #9aa3b5; }
@@ -85,21 +147,15 @@
     :root { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #0ca30c; --s7: #9085e9; --s8: #e66767;
             --grid: #262b34; --axis: #3a414d; --other: #566074; }
   }
-  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-  .seg button { border: 0; border-radius: 0; background: var(--card); color: var(--muted); padding: 5px 11px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: var(--card); color: var(--muted); padding: 6px 12px; }
   .seg button.on { background: var(--code); color: var(--text); font-weight: 600; }
-  .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
-  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
-  .tile .t-label { font-size: 12px; color: var(--muted); }
-  .tile .t-value { font-size: 24px; font-weight: 600; margin-top: 2px; }
-  .tile .t-sub { font-size: 12px; color: var(--muted); }
-  .charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); gap: 16px; align-items: start; transition: opacity .15s; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 16px; align-items: start; transition: opacity .15s; }
   .charts.loading, .kpis.loading { opacity: .5; }
   @media (max-width: 700px) { .charts { grid-template-columns: 1fr; } }
   .chart-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
   .chart-head h3 { font-size: 14px; margin: 0; }
   .chart-head .sub { font-size: 12px; color: var(--muted); }
-  .chart-head .spacer { flex: 1; }
   .chart-head button { font-size: 12px; padding: 2px 8px; }
   .legend-row { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 2px 0 6px; }
   .key { display: inline-block; vertical-align: middle; margin-right: 6px; }
@@ -109,7 +165,7 @@
   svg.chart text { fill: var(--muted); font-size: 11px; font-family: inherit; }
   svg.chart text.end-label { fill: var(--text); font-size: 12px; }
   svg.chart text.tip-label { fill: var(--text); font-size: 12px; }
-  .viz-table { width: 100%; font-size: 12px; } .viz-table td, .viz-table th { padding: 4px 8px; }
+  .viz-table { width: 100%; font-size: 12px; } .viz-table td, .viz-table th { padding: 4px 8px; background: none; }
   #tooltip { position: fixed; z-index: 10; pointer-events: none; background: var(--card); border: 1px solid var(--line);
              border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.15); min-width: 140px; }
   #tooltip .tt-head { color: var(--muted); margin-bottom: 4px; }
@@ -119,16 +175,36 @@
 </style>
 </head>
 <body>
-<header>
-  <h1>lltop</h1>
-  <nav class="tabs"><a href="#live" id="tab-live" class="on">Live</a><a href="#history" id="tab-history">History</a><a href="#charts" id="tab-charts">Charts</a></nav>
-  <span><span id="conn-dot" class="dot"></span><span id="conn">connecting…</span></span>
-  <span class="muted" id="upstream"></span>
-  <span class="muted" id="ps"></span>
-  <span class="spacer"></span>
-  <span class="muted" id="hist-status"></span>
-</header>
+<div class="shell">
+<aside class="side">
+  <div class="brand">
+    <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+      <rect width="28" height="28" rx="7" fill="#2f6fdb"/>
+      <rect x="6.5" y="13" width="3.5" height="8.5" rx="1" fill="#fff"/><rect x="12.25" y="6.5" width="3.5" height="15" rx="1" fill="#fff"/>
+      <rect x="18" y="10" width="3.5" height="11.5" rx="1" fill="#fff" opacity=".7"/>
+    </svg>
+    <div><strong>lltop</strong><span>like htop, for LLMs</span></div>
+  </div>
+  <nav class="tabs" aria-label="Pages">
+    <a href="#live" id="tab-live" class="on">Live <span class="count hidden" id="nav-active"></span></a>
+    <a href="#history" id="tab-history">History</a>
+    <a href="#charts" id="tab-charts">Charts</a>
+  </nav>
+  <div class="side-foot">
+    <div><span id="conn-dot" class="dot"></span><span id="conn">connecting…</span></div>
+    <div><span id="ps-dot" class="dot"></span><span>Ollama <b id="upstream"></b> <span id="ps" class="problem"></span></span></div>
+    <div id="hist-status"></div>
+  </div>
+</aside>
+<div class="page">
 <main id="view-live">
+  <header class="page-head"><h1>Live</h1><p id="live-lead">Waiting for the first reading…</p></header>
+  <section class="kpis" id="live-kpis" aria-label="Headline numbers"></section>
+  <section class="card hidden" id="machine" aria-label="Machine">
+    <div class="card-head"><span class="name" id="m-name"></span><span class="muted" id="m-facts"></span>
+      <span class="spacer"></span><span class="muted" id="m-span"></span></div>
+    <div class="meters" id="m-meters"></div>
+  </section>
   <section>
     <h2>Models</h2>
     <div class="models" id="models"></div>
@@ -136,52 +212,52 @@
   </section>
   <section>
     <h2>Last finished requests <span class="muted" id="recent-count"></span></h2>
-    <table>
+    <div class="table-wrap"><table>
       <thead><tr>
         <th>Time</th><th>Model</th><th>Endpoint</th><th>App / client</th><th>Status</th>
-        <th class="num">Prompt tok</th><th class="num">Output tok</th><th class="num">TTFT</th>
+        <th class="num">Prompt tok</th><th class="num">Output tok</th><th class="num">First token</th>
         <th class="num">Prompt tok/s</th><th class="num">Output tok/s</th><th class="num">Total</th><th>Load</th>
       </tr></thead>
       <tbody id="recent"></tbody>
-    </table>
+    </table></div>
     <div class="empty" id="no-recent">Nothing finished yet. Requests sent to this port show up here.</div>
   </section>
 </main>
 <main id="view-charts" class="hidden">
-  <section>
-    <div class="filters">
-      <span class="seg" id="c-range">
-        <button data-r="24h" class="on">24 hours</button><button data-r="7d">7 days</button><button data-r="30d">30 days</button><button data-r="90d">90 days</button>
-      </span>
-      <select id="c-model"><option value="">all models</option></select>
-      <span class="muted" id="c-info"></span>
-    </div>
-    <div class="kpis" id="c-kpis"></div>
-    <div class="charts" id="c-charts"></div>
-  </section>
+  <header class="page-head"><h1>Charts</h1><p>How the models were used and how fast they answered.</p></header>
+  <div class="filters">
+    <span class="seg" id="c-range">
+      <button data-r="24h" class="on">24 hours</button><button data-r="7d">7 days</button><button data-r="30d">30 days</button><button data-r="90d">90 days</button>
+    </span>
+    <select id="c-model" aria-label="Model"><option value="">all models</option></select>
+    <span class="muted" id="c-info"></span>
+  </div>
+  <div class="kpis" id="c-kpis"></div>
+  <div class="charts" id="c-charts"></div>
 </main>
 <div id="tooltip" class="hidden"></div>
 <main id="view-history" class="hidden">
-  <section>
-    <div class="filters">
-      <select id="f-model"><option value="">all models</option></select>
-      <select id="f-status"><option value="">any status</option></select>
-      <select id="f-endpoint"><option value="">all endpoints</option></select>
-      <input id="f-client" placeholder="app or client" size="14">
-      <input id="f-q" type="search" placeholder="search prompts and responses…">
-      <button id="f-new" class="hidden"></button>
-    </div>
-    <table>
-      <thead><tr>
-        <th>Time</th><th>Model</th><th>Endpoint</th><th>App / client</th><th>Status</th><th>Prompt</th>
-        <th class="num">Prompt tok</th><th class="num">Output tok</th><th class="num">TTFT</th>
-        <th class="num">Prompt tok/s</th><th class="num">Output tok/s</th><th class="num">Total</th><th>Load</th>
-      </tr></thead>
-      <tbody id="history"></tbody>
-    </table>
-    <div class="bar-row"><button id="h-more" class="hidden">Load older</button><span class="muted" id="h-info"></span></div>
-  </section>
+  <header class="page-head"><h1>History</h1><p>Every request, newest first. Click a row for the full prompt and response.</p></header>
+  <div class="filters">
+    <select id="f-model" aria-label="Model"><option value="">all models</option></select>
+    <select id="f-status" aria-label="Status"><option value="">any status</option></select>
+    <select id="f-endpoint" aria-label="Endpoint"><option value="">all endpoints</option></select>
+    <input id="f-client" placeholder="app or client" size="14" aria-label="App or client">
+    <input id="f-q" type="search" placeholder="search prompts and responses…" aria-label="Search prompts and responses">
+    <button id="f-new" class="hidden"></button>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr>
+      <th>Time</th><th>Model</th><th>Endpoint</th><th>App / client</th><th>Status</th><th>Prompt</th>
+      <th class="num">Prompt tok</th><th class="num">Output tok</th><th class="num">First token</th>
+      <th class="num">Prompt tok/s</th><th class="num">Output tok/s</th><th class="num">Total</th><th>Load</th>
+    </tr></thead>
+    <tbody id="history"></tbody>
+  </table></div>
+  <div class="bar-row"><button id="h-more" class="hidden">Load older</button><span class="muted" id="h-info"></span></div>
 </main>
+</div>
+</div>
 <script>
 "use strict";
 // Everything from requests is shown with textContent, never innerHTML: a prompt that
@@ -193,6 +269,9 @@ let models = [];          // from /api/ps
 let psOk = null, psError = null;
 const active = new Map(); // id -> request record (+ .el, its DOM element)
 let recent = [];          // finished records, newest first
+let machine = null;       // the last machine reading (null: meters off or not supported)
+let trend = [];           // percentages of the last readings, oldest first
+const TREND_MAX = 200;
 const cards = new Map();  // model key -> card element
 const openDetails = new Set();
 
@@ -216,8 +295,8 @@ function fmtSec(s) {
   if (s == null) return "–";
   if (s < 1) return Math.round(s * 1000) + " ms";
   if (s < 60) return s.toFixed(1) + " s";
-  const m = Math.floor(s / 60), r = Math.round(s % 60);
-  return m + "m " + String(r).padStart(2, "0") + "s";
+  const whole = Math.round(s);
+  return Math.floor(whole / 60) + "m " + String(whole % 60).padStart(2, "0") + "s";
 }
 const fmtRate = (r) => r == null ? "–" : r.toFixed(r < 10 ? 1 : 0);
 const fmtNum = (n) => n == null ? "–" : n.toLocaleString();
@@ -316,7 +395,130 @@ function renderModels() {
   }
   for (const r of active.values()) modelCard(key(r.model)).reqs.append(r.el);
   $("no-models").style.display = keys.size ? "none" : "";
+  renderTiles();
   tick();
+}
+
+// --------------------------------------------------------- headline numbers
+function median(values) {
+  const v = values.filter((x) => x != null).sort((a, b) => a - b);
+  if (!v.length) return null;
+  return v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
+}
+function liveRate(r, t) {      // tokens/s so far, from chunk timing
+  return r.first_token_ts && r.chunks > 1 ? (r.chunks - 1) / Math.max(t - r.first_token_ts, 0.001) : null;
+}
+const tiles = {};
+function setTile(id, label, value, sub) {
+  let t = tiles[id];
+  if (!t) {
+    t = tiles[id] = el("div", "tile");
+    t.v = el("div", "t-value"); t.s = el("div", "t-sub");
+    t.append(el("div", "t-label", label), t.v, t.s);
+    $("live-kpis").append(t);
+  }
+  if (t.v.textContent !== value) t.v.textContent = value;
+  if (t.s.textContent !== (sub || "")) t.s.textContent = sub || "";
+}
+function renderTiles() {
+  const t = now(), running = [...active.values()];
+  const waiting = running.filter((r) => !r.chunks).length;
+  const rates = running.map((r) => liveRate(r, t)).filter((x) => x != null);
+  const done = recent.filter((r) => r.status === "finished"), n = recent.length;
+  const of = n ? "last " + n + " requests" : "no requests yet";
+  setTile("active", "In progress", fmtNum(running.length),
+          running.length ? (waiting ? waiting + " waiting for the first token" : "all generating") : "idle");
+  setTile("rate", "Output speed now", rates.length ? fmtRate(rates.reduce((a, b) => a + b, 0)) + " tok/s" : "–",
+          rates.length > 1 ? "across " + rates.length + " requests" : (rates.length ? "estimated from the stream" : "nothing is generating"));
+  setTile("tps", "Median output speed", n ? (median(done.map((r) => (r.stats || {}).output_tokens_per_s)) == null ? "–"
+          : fmtRate(median(done.map((r) => (r.stats || {}).output_tokens_per_s))) + " tok/s") : "–", of);
+  setTile("ttft", "Median wait for first token", fmtSec(median(done.map((r) => (r.stats || {}).ttft_s))), of);
+  setTile("cold", "Cold model loads", n ? fmtNum(recent.filter((r) => (r.stats || {}).cold_load === true).length) : "–", of);
+  setTile("failed", "Failed or cancelled", n ? fmtNum(recent.filter((r) => r.status !== "finished").length) : "–", of);
+  const nav = $("nav-active");
+  nav.textContent = running.length; nav.classList.toggle("hidden", !running.length);
+  const loaded = models.length;
+  $("live-lead").textContent = (loaded === 1 ? "1 model loaded" : loaded + " models loaded") + " · " +
+    (running.length === 1 ? "1 request in progress" : running.length + " requests in progress");
+}
+
+// ------------------------------------------------------------- machine card
+// A meter per ratio (label, figure, bar; the track is a lighter step of the fill) and
+// a sparkline of the last readings underneath. Only memory and disk change colour when
+// nearly full, always with a word beside the figure: a busy CPU or GPU is not a problem.
+const meters = new Map();
+function meter(id) {
+  let m = meters.get(id);
+  if (!m) {
+    m = el("div", "meter");
+    const top = el("div", "meter-top");
+    m.label = el("span"); m.value = el("b");
+    top.append(m.label, m.value);
+    m.track = el("div", "track"); m.fill = el("span"); m.track.append(m.fill);
+    m.track.setAttribute("role", "img");
+    m.note = el("div", "meter-note");
+    m.spark = svgEl("svg", { class: "spark hidden", viewBox: "0 0 100 30", preserveAspectRatio: "none", "aria-hidden": "true" });
+    m.spark.append(svgEl("line", { x1: 0, x2: 100, y1: 29.5, y2: 29.5 }));
+    m.line = svgEl("polyline"); m.spark.append(m.line);
+    m.append(top, m.track, m.note, m.spark);
+    meters.set(id, m);
+  }
+  return m;
+}
+function setMeter(id, label, pct, value, note, series, limits) {
+  const m = meter(id);
+  m.label.textContent = label; m.label.title = label;
+  m.value.textContent = value;
+  const p = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+  m.fill.style.width = p + "%";
+  const level = limits && pct != null ? (pct >= limits[1] ? "bad" : pct >= limits[0] ? "warn" : "") : "";
+  m.track.className = "track " + level;
+  m.track.setAttribute("aria-label", label + " " + value);
+  m.note.replaceChildren();
+  if (level) m.note.append(el("span", "flag", (level === "bad" ? "Almost full" : "Getting full") + (note ? " · " : "")));
+  if (note) m.note.append(note);
+  const pts = (series || []).map((v, i) => [i, v]).filter(([, v]) => v != null);
+  m.spark.classList.toggle("hidden", pts.length < 2);
+  if (pts.length >= 2) {
+    const last = Math.max(series.length - 1, 1);
+    m.line.setAttribute("points", pts.map(([i, v]) => (100 * i / last).toFixed(1) + "," + (28 - 0.26 * Math.min(100, v)).toFixed(1)).join(" "));
+  }
+  return m;
+}
+const ratio = (used, total) => used != null && total ? 100 * used / total : null;
+const fmtPct = (p) => p == null ? "–" : Math.round(p) + "%";
+const fmtOf = (used, total) => used == null || !total ? "–" : fmtBytes(used).replace(/ [KMGT]?B$/, "") + " of " + fmtBytes(total);
+function renderMachine() {
+  const box = $("machine");
+  box.classList.toggle("hidden", !machine);
+  if (!machine) return;
+  const m = machine, gpus = m.gpus || [];
+  $("m-name").textContent = m.name || "This machine";
+  const facts = [];
+  if (m.cores) facts.push(m.cores + " CPU threads");
+  if (m.load1 != null) facts.push("load " + m.load1.toFixed(2));
+  if (m.temp_c != null) facts.push("CPU " + Math.round(m.temp_c) + " °C");
+  $("m-facts").textContent = facts.join(" · ");
+  if (trend.length > 1) {
+    const span = trend[trend.length - 1].ts - trend[0].ts;
+    $("m-span").textContent = "trend lines: last " + (span < 90 ? Math.round(span) + " seconds" : Math.round(span / 60) + " minutes");
+  } else $("m-span").textContent = "";
+  const used = [];
+  used.push(setMeter("cpu", "CPU", m.cpu_pct, fmtPct(m.cpu_pct), "", trend.map((p) => p.cpu)));
+  const memPct = ratio(m.mem_used, m.mem_total);
+  used.push(setMeter("mem", "Memory", memPct, fmtOf(m.mem_used, m.mem_total), "", trend.map((p) => p.mem), [90, 97]));
+  gpus.forEach((g, i) => {
+    const tag = gpus.length > 1 ? "GPU " + i : "GPU";
+    const notes = [g.name, g.temp_c != null ? Math.round(g.temp_c) + " °C" : null, g.watts != null ? Math.round(g.watts) + " W" : null];
+    used.push(setMeter("gpu" + i, tag, g.util_pct, fmtPct(g.util_pct), notes.filter(Boolean).join(" · "),
+                       trend.map((p) => ((p.gpus || [])[i] || {}).util)));
+    used.push(setMeter("vram" + i, tag + " memory", ratio(g.mem_used, g.mem_total), fmtOf(g.mem_used, g.mem_total), "",
+                       trend.map((p) => ((p.gpus || [])[i] || {}).mem)));
+  });
+  if (m.disk_total) used.push(setMeter("disk", "Disk", ratio(m.disk_used, m.disk_total), fmtOf(m.disk_used, m.disk_total),
+                                       "", null, [90, 97]));
+  for (const [id, e] of meters) if (!used.includes(e)) { e.remove(); meters.delete(id); }
+  $("m-meters").append(...used);
 }
 
 // --------------------------------------------------------- active requests
@@ -379,6 +581,7 @@ function tick() {
       c.expires.textContent = left > 3e8 ? "never" : (left > 0 ? fmtSec(left) : "now");
     }
   }
+  if (active.size) renderTiles();
 }
 setInterval(tick, 1000);
 
@@ -437,6 +640,7 @@ function recentRow(r) {
 function renderRecent() {
   $("recent").replaceChildren(...recent.flatMap(recentRow));
   $("no-recent").style.display = recent.length ? "none" : "";
+  $("recent").closest(".table-wrap").classList.toggle("hidden", !recent.length);
   $("recent-count").textContent = recent.length ? "(" + recent.length + ")" : "";
 }
 
@@ -448,7 +652,8 @@ function startRequest(r) {
   buildRequest(r);
 }
 function renderPs() {
-  $("ps").textContent = psOk === false ? "/api/ps failing: " + (psError || "") : "";
+  $("ps").textContent = psOk === false ? "not answering: " + (psError || "") : "";
+  $("ps-dot").className = "dot " + (psOk === false ? "bad" : psOk ? "live" : "");
 }
 const handlers = {
   snapshot(ev) {
@@ -457,9 +662,17 @@ const handlers = {
     models = ev.models || []; psOk = ev.ps_ok; psError = ev.ps_error;
     for (const r of ev.active || []) startRequest(r);
     recent = ev.recent || [];
-    if (ev.upstream) $("upstream").textContent = "→ " + ev.upstream;
+    if (ev.upstream) $("upstream").textContent = ev.upstream.replace(/^https?:\/\//, "");
+    machine = ev.machine || null; trend = ev.machine_trend || [];
     renderHistStatus(ev.history);
-    renderPs(); renderModels(); renderRecent();
+    renderPs(); renderModels(); renderRecent(); renderMachine();
+  },
+  machine(ev) {
+    machine = ev;
+    trend.push({ ts: ev.ts, cpu: ev.cpu_pct, mem: ratio(ev.mem_used, ev.mem_total),
+                 gpus: (ev.gpus || []).map((g) => ({ util: g.util_pct, mem: ratio(g.mem_used, g.mem_total) })) });
+    if (trend.length > TREND_MAX) trend = trend.slice(-TREND_MAX);
+    if (!document.hidden) renderMachine();
   },
   models(ev) { models = ev.models || []; psOk = ev.ok; psError = ev.error; renderPs(); renderModels(); },
   started(ev) { startRequest({ ...ev }); renderModels(); },
@@ -495,10 +708,10 @@ function renderHistStatus(st) {
   if (!st || !st.enabled) { t.textContent = ""; return; }
   if (st.ok === false) {
     t.textContent = "history: Postgres down, " + st.queued + " waiting" + (st.dropped ? ", " + st.dropped + " lost" : "");
-    t.style.color = "var(--bad)";
+    t.className = "problem";
   } else {
     t.textContent = "history: Postgres" + (st.queued ? " (" + st.queued + " saving…)" : "");
-    t.style.color = "";
+    t.className = "";
   }
 }
 function histParams(more) {
@@ -944,7 +1157,7 @@ showView();
 let retry = 1000;
 function connect() {
   const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/lltop/ws");
-  ws.onopen = () => { retry = 1000; $("conn").textContent = "live"; $("conn-dot").className = "dot live"; };
+  ws.onopen = () => { retry = 1000; $("conn").textContent = "Live"; $("conn-dot").className = "dot live"; };
   ws.onmessage = (m) => {
     try {
       const ev = JSON.parse(m.data);
@@ -952,7 +1165,7 @@ function connect() {
     } catch (err) { console.error("event failed", err); }
   };
   ws.onclose = () => {
-    $("conn").textContent = "reconnecting…"; $("conn-dot").className = "dot bad";
+    $("conn").textContent = "Reconnecting…"; $("conn-dot").className = "dot bad";
     setTimeout(connect, retry);
     retry = Math.min(retry * 2, 5000);
   };
