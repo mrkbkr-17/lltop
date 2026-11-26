@@ -2,6 +2,12 @@
 
 *Like `htop`, but for LLMs.*
 
+[![tests](https://github.com/mrkbkr-17/lltop/actions/workflows/tests.yml/badge.svg)](https://github.com/mrkbkr-17/lltop/actions/workflows/tests.yml)
+[![license: MIT](https://img.shields.io/github/license/mrkbkr-17/lltop)](LICENSE)
+![python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
+
+![The lltop dashboard: two loaded models, one request streaming its thinking and response, and a table of finished requests with token counts and speeds](docs/dashboard.png)
+
 A live monitoring dashboard for [Ollama](https://ollama.com). Put it in front of Ollama
 and watch every request as it happens: which model, who sent it, the prompt, the thinking
 and the response appearing token by token, then the final speed and timing numbers.
