@@ -1,6 +1,6 @@
 [project]
 name = "lltop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Like htop, but for LLMs. Live dashboard for Ollama: a streaming proxy that shows prompts, responses and speed as they are generated"
 readme = "README.md"
 authors = [
